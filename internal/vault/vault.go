@@ -5,6 +5,7 @@ package vault
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
 	"errors"
@@ -190,4 +191,39 @@ func NormalizeRecoveryCode(typed string) ([]byte, error) {
 // Wipe overwrites b with zeros. It is best effort: Go may have copied the bytes elsewhere.
 func Wipe(b []byte) {
 	clear(b)
+}
+
+// PasswordHash is an Argon2id hash of a login password with its parameters.
+type PasswordHash struct {
+	KDF  KDFParams `json:"kdf"`
+	Hash []byte    `json:"hash"`
+}
+
+// HashPassword hashes a login password with fresh default parameters.
+func HashPassword(password []byte) (PasswordHash, error) {
+	p, err := NewKDFParams()
+	if err != nil {
+		return PasswordHash{}, err
+	}
+	h, err := DeriveKEK(password, p)
+	if err != nil {
+		return PasswordHash{}, err
+	}
+	return PasswordHash{KDF: p, Hash: h}, nil
+}
+
+// VerifyPassword reports whether password matches h, in constant time. It returns an error only for
+// unusable parameters (weak or tampered), never for a wrong password.
+func VerifyPassword(password []byte, h PasswordHash) (bool, error) {
+	got, err := DeriveKEK(password, h.KDF)
+	if err != nil {
+		return false, err
+	}
+	defer Wipe(got)
+	return subtle.ConstantTimeCompare(got, h.Hash) == 1, nil
+}
+
+// MetaAAD binds a value sealed outside the fields table (such as the TOTP secret) to its name.
+func MetaAAD(name string) []byte {
+	return encodeAAD("meta", name)
 }

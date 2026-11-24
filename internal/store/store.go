@@ -318,18 +318,19 @@ func ParseRef(s string) (Ref, error) {
 	} else {
 		field = DefaultField
 	}
-	folder, entry, err := splitEntryPath(path)
+	folder, entry, err := SplitPath(path)
 	if err != nil {
 		return Ref{}, err
 	}
 	return Ref{Folder: folder, Entry: entry, Field: field}, nil
 }
 
-func splitEntryPath(path string) (folder, entry string, err error) {
+// SplitPath splits "folder/path/entry" into its folder and entry name, validating both.
+func SplitPath(path string) (folder, entry string, err error) {
 	if path == "" {
 		return "", "", fmt.Errorf("%w: empty path", ErrInvalidName)
 	}
-	if err := validateFolder(path); err != nil {
+	if err := ValidateFolder(path); err != nil {
 		return "", "", err
 	}
 	i := strings.LastIndex(path, "/")
@@ -339,7 +340,8 @@ func splitEntryPath(path string) (folder, entry string, err error) {
 	return path[:i], path[i+1:], nil
 }
 
-func validateFolder(path string) error {
+// ValidateFolder checks a folder path; "" is the root.
+func ValidateFolder(path string) error {
 	if path == "" {
 		return nil // root
 	}
@@ -374,7 +376,7 @@ type Folder struct {
 
 // EnsureFolder creates path and its ancestors if needed.
 func (s *Store) EnsureFolder(path string) error {
-	if err := validateFolder(path); err != nil {
+	if err := ValidateFolder(path); err != nil {
 		return err
 	}
 	return s.unsealed(func([]byte) error {
@@ -442,7 +444,7 @@ func (s *Store) DeleteFolder(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: cannot delete the root folder", ErrConflict)
 	}
-	if err := validateFolder(path); err != nil {
+	if err := ValidateFolder(path); err != nil {
 		return err
 	}
 	return s.unsealed(func([]byte) error {
@@ -509,7 +511,7 @@ type EntryInput struct {
 
 // PutEntry creates the entry (and its folders) or replaces its metadata. Fields are kept.
 func (s *Store) PutEntry(in EntryInput, actor string) error {
-	folder, name, err := splitEntryPath(in.Ref)
+	folder, name, err := SplitPath(in.Ref)
 	if err != nil {
 		return err
 	}
@@ -633,7 +635,7 @@ func (s *Store) liveFields(entryID int64) ([]string, error) {
 
 // GetEntry returns the metadata of the entry at path ("folder/name").
 func (s *Store) GetEntry(path string) (Entry, error) {
-	folder, name, err := splitEntryPath(path)
+	folder, name, err := SplitPath(path)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -655,7 +657,7 @@ func (s *Store) GetEntry(path string) (Entry, error) {
 
 // ListEntries lists the entries in folder; with recursive, also those in its subfolders.
 func (s *Store) ListEntries(folder string, recursive bool) ([]Entry, error) {
-	if err := validateFolder(folder); err != nil {
+	if err := ValidateFolder(folder); err != nil {
 		return nil, err
 	}
 	where := `f.path = ?1`
@@ -714,7 +716,7 @@ func (s *Store) DeleteEntry(path, actor string) error {
 }
 
 func (s *Store) withEntry(path string, fn func(tx *sql.Tx, dek []byte, id int64) error) error {
-	folder, name, err := splitEntryPath(path)
+	folder, name, err := SplitPath(path)
 	if err != nil {
 		return err
 	}
@@ -744,7 +746,7 @@ func (s *Store) SetField(path, field string, value []byte, actor string) error {
 	if len(value) > MaxValueSize {
 		return ErrTooLarge
 	}
-	folder, name, err := splitEntryPath(path)
+	folder, name, err := SplitPath(path)
 	if err != nil {
 		return err
 	}

@@ -49,6 +49,31 @@ var migrations = []string{
 		created_at INTEGER NOT NULL,
 		UNIQUE (entry_id, name, version)
 	);`,
+
+	// 2: tokens (agent tokens and owner sessions) and the hash-chained audit log.
+	`CREATE TABLE tokens (
+		id           INTEGER PRIMARY KEY,
+		name         TEXT    NOT NULL,
+		kind         TEXT    NOT NULL,          -- 'agent' or 'owner'
+		hash         BLOB    NOT NULL UNIQUE,   -- SHA-256 of the token
+		scopes       TEXT    NOT NULL DEFAULT '[]',
+		created_at   INTEGER NOT NULL,
+		expires_at   INTEGER,
+		last_used_at INTEGER,
+		revoked_at   INTEGER
+	);
+	CREATE UNIQUE INDEX tokens_live_agent_name ON tokens(name) WHERE revoked_at IS NULL AND kind = 'agent';
+
+	CREATE TABLE audit (
+		id        INTEGER PRIMARY KEY,
+		at        INTEGER NOT NULL,
+		actor     TEXT    NOT NULL,
+		action    TEXT    NOT NULL,
+		target    TEXT    NOT NULL DEFAULT '',
+		source    TEXT    NOT NULL DEFAULT '',
+		prev_hash BLOB    NOT NULL,
+		hash      BLOB    NOT NULL
+	);`,
 }
 
 func (s *Store) migrate() error {

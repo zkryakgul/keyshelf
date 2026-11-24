@@ -60,7 +60,21 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
 - **Web UI**: folder tree on the left, entries in the middle, entry detail on the right; global search (name, url,
   tags); copy buttons per field; audit tab per entry; tokens page; dark and light theme; works on a phone.
 - **HTTP API** (`/api/v1`, JSON, `Authorization: Bearer <token>`): folders, entries, fields, tokens, audit,
-  seal state. OpenAPI file in the repo.
+  seal state. OpenAPI file in the repo. Routes are declared in one table in `internal/server`; the permission
+  test fails for any route without an out-of-scope case.
+  - Public (no token, rate-limited): `GET status`, `POST unseal`, `POST recover`, `POST login`.
+  - Any token, checked per folder: `GET folders`, `GET entries?folder=&recursive=&q=` (results filtered to
+    `list`), `GET|PUT|DELETE entries/{path}`, `GET|PUT|DELETE values/{path}?field=` (raw bytes,
+    `application/octet-stream`, so values never pass through JSON or a shell argument), `POST logout`.
+  - Owner session only: `seal`, `tokens` (list/create/revoke), `audit`, `passphrase`, `password`,
+    `totp/setup`, `totp/confirm`.
+  - JSON bodies must be `application/json` (a cross-site form cannot send that without a preflight, which is
+    never answered). Outside a scope the answer is `403` whether or not the entry exists.
+- **Owner sessions.** `POST login` returns an owner token valid for 1 hour. Because agents run as the same Unix
+  user, the CLI keeps it apart from the agent token and the owner should log out when done; the web UI uses
+  the same sessions through a cookie.
+- **TOTP**: RFC 6238 (HMAC-SHA1, 30 s, 6 digits) on the standard library's `crypto/hmac`; each code is accepted
+  once; the secret is sealed with the DEK.
 - **CLI** `ks`: v0.1 has `init`, `serve`, `unseal`, `seal`, `ls`, `get`, `put`, `gen`, `run`, `rm`,
   `token create|ls|revoke`, `backup`. Later: `mv`, `history`, `import`, `export`.
   Config in `~/.config/keyshelf/config.json` (server URL + token, mode 0600); `KEYSHELF_TOKEN` overrides the token.

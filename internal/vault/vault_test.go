@@ -210,3 +210,25 @@ func TestWipe(t *testing.T) {
 		t.Fatal("not wiped")
 	}
 }
+
+func TestPasswordHash(t *testing.T) {
+	pw := newKey(t)
+	h, err := HashPassword(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := VerifyPassword(pw, h); !ok || err != nil {
+		t.Fatalf("right password rejected: %v", err)
+	}
+	if ok, _ := VerifyPassword(newKey(t), h); ok {
+		t.Fatal("wrong password accepted")
+	}
+	weak := h
+	weak.KDF.MemoryKiB = 1024
+	if _, err := VerifyPassword(pw, weak); err == nil {
+		t.Fatal("weak stored parameters must be refused")
+	}
+	if bytes.Equal(MetaAAD("a"), FieldAAD(0, "a", 0)) {
+		t.Fatal("meta and field AAD must differ")
+	}
+}
