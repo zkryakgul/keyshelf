@@ -60,7 +60,7 @@ type Store struct {
 
 // Open opens (or creates) the database at path with mode 0600. The store starts sealed.
 func Open(path string) (*Store, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304 -- the database path is chosen by the owner
 	if err != nil {
 		return nil, err
 	}
@@ -680,8 +680,10 @@ func (s *Store) Search(q string) ([]Entry, error) {
 func (s *Store) queryEntries(where string, args ...any) ([]Entry, error) {
 	out := []Entry{}
 	err := s.unsealed(func([]byte) error {
-		rows, err := s.db.Query(`SELECT `+entryColumns+` FROM entries e JOIN folders f ON f.id = e.folder_id
-			WHERE e.deleted_at IS NULL AND f.deleted_at IS NULL AND `+where+` ORDER BY f.path, e.name`, args...)
+		// where is one of the constant fragments in ListEntries and Search; every value is a bound argument.
+		query := `SELECT ` + entryColumns + ` FROM entries e JOIN folders f ON f.id = e.folder_id
+			WHERE e.deleted_at IS NULL AND f.deleted_at IS NULL AND ` + where + ` ORDER BY f.path, e.name` // #nosec G202
+		rows, err := s.db.Query(query, args...)
 		if err != nil {
 			return err
 		}
@@ -850,4 +852,22 @@ func (s *Store) inTx(fn func(tx *sql.Tx) error) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// Backup writes a consistent copy of the database (still encrypted) to dest, which must not exist.
+// It works while the server runs and while sealed.
+func (s *Store) Backup(dest string) error {
+	if _, err := os.Stat(dest); err == nil {
+		return fmt.Errorf("%w: %s already exists", ErrConflict, dest)
+	}
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- the backup path is chosen by the owner
+	if err != nil {
+		return err
+	}
+	f.Close()
+	os.Remove(dest) // VACUUM INTO wants to create it; we only reserved the name with the right mode
+	if _, err := s.db.Exec(`VACUUM INTO ?`, dest); err != nil {
+		return err
+	}
+	return os.Chmod(dest, 0o600)
 }

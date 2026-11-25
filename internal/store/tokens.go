@@ -153,7 +153,7 @@ func (s *Store) insertToken(name, kind string, scopes []Scope, ttl time.Duration
 	return secret, tok, nil
 }
 
-const tokenColumns = `id, name, kind, scopes, created_at, expires_at, last_used_at`
+const tokenColumns = `id, name, kind, scopes, created_at, expires_at, last_used_at` // #nosec G101 -- a list of column names, not a credential
 
 func scanToken(row scanner) (Token, error) {
 	var t Token

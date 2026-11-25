@@ -45,7 +45,7 @@ func Seal(key, plaintext, aad []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("vault: random nonce: %w", err)
 	}
-	return sealWithNonce(key, nonce, plaintext, aad)
+	return sealWithNonce(key, nonce, plaintext, aad) // #nosec G407 -- the nonce is fresh from crypto/rand just above
 }
 
 func sealWithNonce(key, nonce, plaintext, aad []byte) ([]byte, error) {
@@ -84,7 +84,7 @@ func encodeAAD(parts ...string) []byte {
 	var b []byte
 	b = append(b, "keyshelf-v1"...)
 	for _, p := range parts {
-		b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
+		b = binary.BigEndian.AppendUint32(b, uint32(len(p))) // #nosec G115 -- AAD parts are short strings
 		b = append(b, p...)
 	}
 	return b

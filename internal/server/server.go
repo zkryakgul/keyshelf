@@ -3,9 +3,13 @@
 package server
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"mime"
@@ -46,6 +50,8 @@ type Options struct {
 	// SessionTTL is the lifetime of an owner session; default 1 hour.
 	SessionTTL time.Duration
 	Logger     *slog.Logger
+	// UI is the embedded web interface, served at /. Optional.
+	UI fs.FS
 }
 
 // Server serves the API.
@@ -94,6 +100,7 @@ func (s *Server) routes() []route {
 		{"PUT /api/v1/values/{path...}", anyToken, false, s.handlePutValue},
 		{"DELETE /api/v1/values/{path...}", anyToken, false, s.handleDeleteValue},
 
+		{"GET /api/v1/session", ownerOnly, true, s.handleSession},
 		{"POST /api/v1/seal", ownerOnly, true, s.handleSeal},
 		{"GET /api/v1/tokens", ownerOnly, false, s.handleListTokens},
 		{"POST /api/v1/tokens", ownerOnly, false, s.handleCreateToken},
@@ -115,6 +122,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such route")
 	})
+	if s.opts.UI != nil {
+		files := http.FileServerFS(s.opts.UI)
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			w.Header().Set("Content-Security-Policy", uiCSP)
+			files.ServeHTTP(w, r)
+		})
+	}
 	return s.hostCheck(mux)
 }
 
@@ -133,6 +151,30 @@ func (s *Server) hostCheck(next http.Handler) http.Handler {
 	})
 }
 
+// uiCSP allows only the embedded files: no inline script or style, no other origin.
+const uiCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
+	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+const sessionCookie = "ks_session"
+
+// csrfFor derives the CSRF token of a cookie session. Another site cannot compute it without the
+// cookie value, which it can neither read nor (SameSite=Strict) send.
+func csrfFor(secret string) string {
+	h := sha256.Sum256([]byte("keyshelf-csrf\x00" + secret))
+	return hex.EncodeToString(h[:])
+}
+
+// credentials returns the bearer token or, for the web UI, the session cookie.
+func credentials(r *http.Request) (secret string, viaCookie bool) {
+	if v, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		return strings.TrimSpace(v), false
+	}
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		return c.Value, true
+	}
+	return "", false
+}
+
 func (s *Server) wrap(rt route) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !rt.sealedOK {
@@ -147,15 +189,20 @@ func (s *Server) wrap(rt route) http.Handler {
 		}
 		var tok store.Token
 		if rt.access != public {
-			secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !ok {
+			secret, viaCookie := credentials(r)
+			if secret == "" {
 				writeError(w, http.StatusUnauthorized, "missing bearer token")
 				return
 			}
 			var err error
-			tok, err = s.st.Authenticate(strings.TrimSpace(secret))
-			if err != nil {
+			tok, err = s.st.Authenticate(secret)
+			if err != nil || (viaCookie && !tok.IsOwner()) {
 				writeError(w, http.StatusUnauthorized, "invalid, expired or revoked token")
+				return
+			}
+			if viaCookie && r.Method != http.MethodGet && r.Method != http.MethodHead &&
+				subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(csrfFor(secret))) != 1 {
+				writeError(w, http.StatusForbidden, "missing or wrong CSRF token")
 				return
 			}
 			if rt.access == ownerOnly && !tok.IsOwner() {

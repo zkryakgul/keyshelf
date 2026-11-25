@@ -67,6 +67,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 	var body struct {
 		Password string `json:"password"`
 		TOTP     string `json:"totp"`
+		Cookie   bool   `json:"cookie"` // web UI: set an HttpOnly cookie instead of returning the token
 	}
 	if !decode(w, r, &body) {
 		return
@@ -109,6 +110,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 		return
 	}
 	s.audit(r, "owner", "login", "")
+	if body.Cookie {
+		http.SetCookie(w, &http.Cookie{
+			Name: sessionCookie, Value: secret, Path: "/api/", Expires: *tok.ExpiresAt,
+			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"csrf": csrfFor(secret), "expires_at": tok.ExpiresAt})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": secret, "expires_at": tok.ExpiresAt})
 }
 
@@ -120,6 +129,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, tok store.
 		return
 	}
 	s.audit(r, tok.Actor(), "logout", "")
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/api/", MaxAge: -1,
+		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -285,6 +296,14 @@ func (s *Server) handleDeleteValue(w http.ResponseWriter, r *http.Request, tok s
 }
 
 // ---- owner only ----
+
+// handleSession tells the web UI whether its cookie is still good and gives it the CSRF token again
+// after a page reload.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request, tok store.Token) {
+	secret, _ := credentials(r)
+	writeJSON(w, http.StatusOK, map[string]any{"csrf": csrfFor(secret), "expires_at": tok.ExpiresAt,
+		"sealed": s.st.Sealed(), "totp_enabled": s.st.TOTPEnabled()})
+}
 
 func (s *Server) handleSeal(w http.ResponseWriter, r *http.Request, tok store.Token) {
 	s.st.Seal()

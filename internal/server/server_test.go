@@ -137,6 +137,7 @@ func TestEveryRouteRefusesOutOfScopeTokens(t *testing.T) {
 		"PUT /api/v1/values/{path...}":     {{"PUT", "/api/v1/values/work/acme/db?field=password", []byte("overwrite"), e.outScope, 403, ""}},
 		"DELETE /api/v1/values/{path...}":  {{"DELETE", "/api/v1/values/work/acme/db?field=password", nil, e.outScope, 403, ""}},
 		// Owner-only routes: an agent token with rights on the whole shelf is still not the owner.
+		"GET /api/v1/session":        {{"GET", "/api/v1/session", nil, e.rootAgent, 403, ""}},
 		"POST /api/v1/seal":          {{"POST", "/api/v1/seal", nil, e.rootAgent, 403, ""}},
 		"GET /api/v1/tokens":         {{"GET", "/api/v1/tokens", nil, e.rootAgent, 403, ""}},
 		"POST /api/v1/tokens":        {{"POST", "/api/v1/tokens", map[string]any{"name": "x", "scopes": []store.Scope{{Folder: "", Perms: []string{"read"}}}}, e.rootAgent, 403, ""}},
@@ -404,3 +405,61 @@ func TestTOTPLogin(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestWebCookieSessionAndCSRF(t *testing.T) {
+	e := newEnv(t, Options{})
+	w := e.do("POST", "/api/v1/login", "", map[string]any{"password": e.password, "cookie": true})
+	if w.Code != 200 {
+		t.Fatalf("login: %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "ks_") {
+		t.Fatal("cookie login must not return the token in the body")
+	}
+	var resp struct{ CSRF string }
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Value == "" {
+		t.Fatalf("cookie %+v", cookies)
+	}
+	call := func(method, url, csrf string, body []byte) int {
+		req := httptest.NewRequest(method, url, bytes.NewReader(body))
+		req.Host = host
+		req.AddCookie(cookies[0])
+		if body != nil {
+			req.Header.Set("Content-Type", "application/octet-stream")
+		}
+		if csrf != "" {
+			req.Header.Set("X-CSRF-Token", csrf)
+		}
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if c := call("GET", "/api/v1/values/work/acme/db", "", nil); c != 200 {
+		t.Fatalf("cookie read: %d", c)
+	}
+	if c := call("PUT", "/api/v1/values/work/acme/db", "", []byte("x")); c != 403 {
+		t.Fatalf("write without CSRF: %d", c)
+	}
+	if c := call("PUT", "/api/v1/values/work/acme/db", strings.Repeat("0", 64), []byte("x")); c != 403 {
+		t.Fatalf("write with wrong CSRF: %d", c)
+	}
+	if c := call("PUT", "/api/v1/values/work/acme/db", resp.CSRF, []byte("x")); c != 204 {
+		t.Fatalf("write with CSRF: %d", c)
+	}
+	// An agent token presented as a cookie is refused: cookies are for owner sessions only.
+	req := httptest.NewRequest("GET", "/api/v1/folders", nil)
+	req.Host = host
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: e.inScope})
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("agent token in cookie: %d", rec.Code)
+	}
+	if c := call("POST", "/api/v1/logout", resp.CSRF, nil); c != 204 {
+		t.Fatalf("logout: %d", c)
+	}
+	if c := call("GET", "/api/v1/folders", "", nil); c != 401 {
+		t.Fatalf("cookie after logout: %d", c)
+	}
+}

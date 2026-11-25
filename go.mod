@@ -1,8 +1,14 @@
 module github.com/zkryakgul/keyshelf
 
-go 1.26.5
+go 1.26.0
 
-require golang.org/x/crypto v0.59.0
+toolchain go1.26.11
+
+require (
+	golang.org/x/crypto v0.59.0
+	golang.org/x/term v0.48.0
+	modernc.org/sqlite v1.63.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
@@ -14,5 +20,4 @@ require (
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.63.0 // indirect
 )

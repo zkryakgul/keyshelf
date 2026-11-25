@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>keyshelf</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+
+<section id="screen-loading" class="screen center"><p class="muted">Loading…</p></section>
+
+<section id="screen-uninit" class="screen center" hidden>
+  <div class="card narrow">
+    <h1>keyshelf</h1>
+    <p>This shelf is not initialised yet. On the server, run <code>ks init</code> in a terminal, then reload.</p>
+  </div>
+</section>
+
+<section id="screen-unseal" class="screen center" hidden>
+  <form id="form-unseal" class="card narrow" autocomplete="off">
+    <h1>keyshelf is sealed</h1>
+    <p class="muted">After a restart the key is not in memory. Type the unseal passphrase.</p>
+    <label>Unseal passphrase <input type="password" name="passphrase" required autofocus></label>
+    <p class="error" data-error></p>
+    <button type="submit" class="primary">Unseal</button>
+    <details>
+      <summary>Forgot the passphrase?</summary>
+      <label>Recovery code <input type="text" name="recovery" spellcheck="false"></label>
+      <label>New passphrase <input type="password" name="newpass"></label>
+      <button type="button" id="btn-recover">Unseal with recovery code</button>
+    </details>
+  </form>
+</section>
+
+<section id="screen-login" class="screen center" hidden>
+  <form id="form-login" class="card narrow">
+    <h1>keyshelf</h1>
+    <label>Login password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+    <label>TOTP code <span class="muted">(if set up)</span> <input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>
+    <p class="error" data-error></p>
+    <button type="submit" class="primary">Log in</button>
+  </form>
+</section>
+
+<section id="screen-app" class="screen" hidden>
+  <header class="topbar">
+    <button id="btn-menu" class="icon only-mobile" aria-label="Folders">☰</button>
+    <strong class="brand">keyshelf</strong>
+    <input id="search" type="search" placeholder="Search names, URLs, tags…" aria-label="Search">
+    <nav class="actions">
+      <button id="btn-new">New entry</button>
+      <button id="btn-tokens">Tokens</button>
+      <button id="btn-theme" title="Switch light or dark theme">Theme</button>
+      <button id="btn-seal" title="Drop the key from memory">Seal</button>
+      <button id="btn-logout">Log out</button>
+    </nav>
+  </header>
+  <div class="panes">
+    <aside id="tree" class="pane tree" aria-label="Folders"></aside>
+    <main class="pane list">
+      <h2 id="list-title">All entries</h2>
+      <ul id="entries" class="entries"></ul>
+      <p id="list-empty" class="muted" hidden>Nothing here yet.</p>
+    </main>
+    <section id="detail" class="pane detail" aria-live="polite">
+      <p class="muted">Select an entry.</p>
+    </section>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+</section>
+
+<dialog id="dlg-entry">
+  <form method="dialog" id="form-entry">
+    <h2 data-title>New entry</h2>
+    <label>Path <span class="muted">(folder/path/name)</span> <input name="path" required pattern="[A-Za-z0-9._\-]+(/[A-Za-z0-9._\-]+)*" spellcheck="false"></label>
+    <label>Kind
+      <select name="kind"><option>login</option><option>api-key</option><option>url</option><option>note</option></select>
+    </label>
+    <label>URL <input name="url" type="text" spellcheck="false"></label>
+    <label>Username <input name="username" type="text" spellcheck="false" autocomplete="off"></label>
+    <label>Tags <span class="muted">(comma separated)</span> <input name="tags" type="text"></label>
+    <label>Notes <textarea name="notes" rows="4"></textarea></label>
+    <label class="check"><input type="checkbox" name="secret_notes"> Notes are secret (encrypted, not searchable)</label>
+    <fieldset data-newonly>
+      <legend>First secret field <span class="muted">(optional)</span></legend>
+      <label>Field name <input name="field" value="password" spellcheck="false"></label>
+      <label>Value <input name="value" type="password" autocomplete="new-password"></label>
+      <button type="button" data-generate>Generate</button>
+    </fieldset>
+    <p class="error" data-error></p>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary" data-save>Save</button></menu>
+  </form>
+</dialog>
+
+<dialog id="dlg-field">
+  <form method="dialog" id="form-field">
+    <h2>Set a secret field</h2>
+    <label>Field name <input name="field" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" spellcheck="false"></label>
+    <label>Value <input name="value" type="password" autocomplete="new-password"></label>
+    <button type="button" data-generate>Generate 32 characters</button>
+    <p class="muted">A new value keeps the old one as an earlier version.</p>
+    <p class="error" data-error></p>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary" data-save>Save</button></menu>
+  </form>
+</dialog>
+
+<dialog id="dlg-tokens" class="wide">
+  <form method="dialog" id="form-token">
+    <h2>Agent tokens</h2>
+    <p class="muted">Each token sees only its folders. <b>list</b> shows names, <b>read</b> reveals values, <b>write</b> changes them.</p>
+    <table class="tokens"><thead><tr><th>Name</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody data-rows></tbody></table>
+    <h3>New token</h3>
+    <label>Name <input name="name" pattern="[A-Za-z0-9._\-]+" spellcheck="false"></label>
+    <label>Scopes <span class="muted">(one per line, FOLDER:perms; empty folder = everything)</span>
+      <textarea name="scopes" rows="3" spellcheck="false" placeholder="work/acme:list,read&#10;home:list,read,write"></textarea></label>
+    <label>Expires after <span class="muted">(days, empty = never)</span> <input name="days" type="number" min="1"></label>
+    <div class="newtoken" data-newtoken hidden>
+      <p><b>Copy the token now; it is shown once.</b></p>
+      <code data-secret></code> <button type="button" data-copy>Copy</button>
+    </div>
+    <p class="error" data-error></p>
+    <menu><button value="cancel" formnovalidate>Close</button><button type="button" class="primary" data-create>Create token</button></menu>
+  </form>
+</dialog>
+
+</body>
+</html>

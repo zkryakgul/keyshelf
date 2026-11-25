@@ -5,7 +5,7 @@ package totp
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- RFC 6238 TOTP is defined on HMAC-SHA1; authenticator apps require it
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
@@ -32,7 +32,7 @@ func NewSecret() ([]byte, error) {
 
 // Code returns the code for time t.
 func Code(secret []byte, t time.Time) string {
-	return codeAt(secret, uint64(t.Unix()/Period), Digits)
+	return codeAt(secret, uint64(t.Unix()/Period), Digits) // #nosec G115 -- Unix time after 1970 is non-negative
 }
 
 func codeAt(secret []byte, counter uint64, digits int) string {
@@ -59,7 +59,8 @@ func Verify(secret []byte, code string, t time.Time, lastStep int64) (int64, boo
 		if step <= lastStep {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(codeAt(secret, uint64(step), Digits)), []byte(code)) == 1 {
+		want := codeAt(secret, uint64(step), Digits) // #nosec G115 -- steps near the current time are positive
+		if subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
 			return step, true
 		}
 	}

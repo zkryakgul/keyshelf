@@ -398,3 +398,33 @@ func TestForeignKeysOn(t *testing.T) {
 	}
 	var _ *sql.DB = s.db
 }
+
+func TestBackup(t *testing.T) {
+	s := unsealedStore(t)
+	v := randValue(t)
+	if err := s.SetField("a/b", "password", v, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "backup.db")
+	if err := s.Backup(dest); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dest); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("backup mode %o", fi.Mode().Perm())
+	}
+	if err := s.Backup(dest); !errors.Is(err, ErrConflict) {
+		t.Fatal("backup must not overwrite")
+	}
+	raw, _ := os.ReadFile(dest)
+	if bytes.Contains(raw, v) {
+		t.Fatal("plaintext in backup")
+	}
+	b, err := Open(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if !b.Initialized() || !b.Sealed() {
+		t.Fatal("backup must be initialised and sealed")
+	}
+}

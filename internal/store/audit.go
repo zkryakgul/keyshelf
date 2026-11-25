@@ -27,7 +27,7 @@ func eventHash(prev []byte, e Event) []byte {
 	h := sha256.New()
 	h.Write(prev)
 	for _, part := range []string{fmt.Sprint(e.ID), fmt.Sprint(e.At.Unix()), e.Actor, e.Action, e.Target, e.Source} {
-		h.Write(binary.BigEndian.AppendUint32(nil, uint32(len(part))))
+		h.Write(binary.BigEndian.AppendUint32(nil, uint32(len(part)))) // #nosec G115 -- audit fields are short strings
 		h.Write([]byte(part))
 	}
 	return h.Sum(nil)
