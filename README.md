@@ -1,3 +1,5 @@
+<p align="center"><img src="internal/web/static/logo.svg" width="96" alt="keyshelf logo"></p>
+
 # keyshelf
 
 A small, self-hosted shelf for the secrets of your projects: URLs, passwords, API keys, tokens and short notes,

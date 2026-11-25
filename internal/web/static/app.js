@@ -25,6 +25,31 @@ function el(tag, props = {}, ...children) {
   return n;
 }
 
+const SVG = "http://www.w3.org/2000/svg";
+function icon(name) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS(SVG, "use");
+  use.setAttribute("href", "#i-" + name);
+  svg.append(use);
+  return svg;
+}
+const KINDS = ["login", "api-key", "url", "note"];
+function kindBadge(kind, big) {
+  const k = KINDS.includes(kind) ? kind : "note";
+  return el("span", { class: "kind " + k + (big ? " big" : ""), title: k }, icon(k));
+}
+function iconButton(name, label, onClick, cls = "") {
+  return el("button", { type: "button", class: cls, title: label, "aria-label": label, on: { click: onClick } }, icon(name));
+}
+
+// busy disables a form's buttons while fn runs (unseal and login take a moment: Argon2id).
+async function busy(form, fn) {
+  const buttons = [...form.querySelectorAll("button")];
+  buttons.forEach((b) => (b.disabled = true));
+  try { return await fn(); } finally { buttons.forEach((b) => (b.disabled = false)); }
+}
+
 function show(screen) {
   for (const s of document.querySelectorAll(".screen")) s.hidden = s.id !== "screen-" + screen;
   const f = $("#screen-" + screen + " [autofocus]");
@@ -67,7 +92,23 @@ async function api(method, path, { json, raw, query } = {}) {
 function formError(form, err) {
   const p = $("[data-error]", form);
   if (p) p.textContent = err ? err.message || String(err) : "";
+  if (err && form.classList.contains("auth")) {
+    form.classList.remove("shake");
+    void form.offsetWidth; // restart the animation
+    form.classList.add("shake");
+  }
 }
+
+// Show/hide buttons next to password inputs.
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-peek]");
+  if (!b) return;
+  const input = b.parentElement.querySelector("input");
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  b.replaceChildren(icon(showing ? "eye" : "eye-off"));
+  b.setAttribute("aria-label", showing ? "Show" : "Hide");
+});
 
 function fmt(ts) {
   if (!ts) return "–";
@@ -120,7 +161,7 @@ $("#form-unseal").addEventListener("submit", async (ev) => {
   const f = ev.target;
   formError(f);
   try {
-    await api("POST", "unseal", { json: { passphrase: f.passphrase.value } });
+    await busy(f, () => api("POST", "unseal", { json: { passphrase: f.passphrase.value } }));
     f.reset();
     boot();
   } catch (e) { formError(f, e); f.passphrase.select(); }
@@ -130,7 +171,7 @@ $("#btn-recover").addEventListener("click", async () => {
   const f = $("#form-unseal");
   formError(f);
   try {
-    await api("POST", "recover", { json: { recovery_code: f.recovery.value, new_passphrase: f.newpass.value } });
+    await busy(f, () => api("POST", "recover", { json: { recovery_code: f.recovery.value, new_passphrase: f.newpass.value } }));
     f.reset();
     boot();
   } catch (e) { formError(f, e); }
@@ -141,7 +182,7 @@ $("#form-login").addEventListener("submit", async (ev) => {
   const f = ev.target;
   formError(f);
   try {
-    const r = await api("POST", "login", { json: { password: f.password.value, totp: f.totp.value.trim(), cookie: true } });
+    const r = await busy(f, () => api("POST", "login", { json: { password: f.password.value, totp: f.totp.value.trim(), cookie: true } }));
     csrf = r.csrf;
     f.reset();
     await enterApp();
@@ -179,6 +220,7 @@ $("#btn-theme").addEventListener("click", () => {
 
 async function enterApp() {
   show("app");
+  if (!selected) renderEmptyDetail();
   await refresh();
 }
 
@@ -201,11 +243,11 @@ function renderTree() {
   }
   const build = (node) => el("ul", {}, [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name)).map((c) =>
     el("li", {},
-      el("a", { class: current.folder === c.path ? "active" : "", title: c.path, on: { click: () => selectFolder(c.path) } }, c.name),
+      el("a", { class: current.folder === c.path ? "active" : "", title: c.path, on: { click: () => selectFolder(c.path) } }, icon("folder"), c.name),
       c.children.size ? build(c) : null)));
-  const tree = $("#tree");
-  tree.replaceChildren(
-    el("ul", {}, el("li", {}, el("a", { class: current.folder === null ? "active" : "", on: { click: () => selectFolder(null) } }, "All entries"))),
+  $("#tree-nav").replaceChildren(
+    el("ul", {}, el("li", {}, el("a", { class: current.folder === null ? "active" : "", on: { click: () => selectFolder(null) } }, icon("all"), "All entries"))),
+    root.children.size ? el("div", { class: "tree-label" }, "Folders") : null,
     build(root));
 }
 
@@ -230,13 +272,18 @@ async function loadEntries() {
     title = current.folder || "(root)";
   }
   $("#list-title").textContent = title;
+  $("#list-count").textContent = list.length ? String(list.length) : "";
   $("#list-empty").hidden = list.length > 0;
-  $("#entries").replaceChildren(...list.map((e) => {
+  $("#entries").replaceChildren(...list.map((e, i) => {
     const path = joinPath(e.folder, e.name);
     const sub = [current.folder === e.folder ? "" : e.folder, e.username, e.url].filter(Boolean).join(" · ");
-    return el("li", { class: path === selected ? "active" : "", on: { click: () => showEntry(path) } },
-      el("div", { class: "name" }, e.name),
-      el("div", { class: "sub" }, sub || e.kind));
+    const li = el("li", { class: path === selected ? "active" : "", on: { click: () => showEntry(path) } },
+      kindBadge(e.kind),
+      el("div", { class: "text" }, el("div", { class: "name" }, e.name), el("div", { class: "sub" }, sub || e.kind)),
+      icon("chevron"));
+    li.lastChild.classList.add("chev");
+    li.style.setProperty("--i", String(Math.min(i, 20)));
+    return li;
   }));
 }
 
@@ -246,9 +293,19 @@ $("#search").addEventListener("input", (ev) => {
   searchTimer = setTimeout(() => { current.query = ev.target.value.trim(); loadEntries(); }, 200);
 });
 $("#btn-menu").addEventListener("click", () => $("#tree").classList.toggle("open"));
+$("#scrim").addEventListener("click", () => $("#tree").classList.remove("open"));
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "/" || $("#screen-app").hidden || document.querySelector("dialog[open]")) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+  ev.preventDefault();
+  $("#search").focus();
+});
 
 function renderEmptyDetail() {
-  $("#detail").replaceChildren(el("p", { class: "muted" }, "Select an entry."));
+  $("#detail").replaceChildren(el("div", { class: "empty" },
+    el("img", { src: "logo.svg", alt: "", width: 48, height: 48 }),
+    el("p", {}, "Select an entry"),
+    el("p", { class: "muted" }, "Values stay hidden until you reveal or copy them, and every read is logged.")));
 }
 
 // ---- entry detail ----
@@ -258,10 +315,8 @@ async function showEntry(path) {
   selected = path;
   for (const li of document.querySelectorAll("#entries li")) li.classList.toggle("active", li.querySelector(".name").textContent === e.name);
   const meta = el("dl", {},
-    el("dt", {}, "Path"), el("dd", {}, path),
-    el("dt", {}, "Kind"), el("dd", {}, e.kind),
     e.url ? [el("dt", {}, "URL"), el("dd", {}, /^https?:\/\//i.test(e.url) ? el("a", { href: e.url, target: "_blank", rel: "noopener noreferrer" }, e.url) : e.url)] : null,
-    e.username ? [el("dt", {}, "Username"), el("dd", {}, e.username, " ", el("button", { on: { click: () => copyText(e.username) } }, "Copy"))] : null,
+    e.username ? [el("dt", {}, "Username"), el("dd", {}, e.username, el("button", { type: "button", on: { click: () => copyText(e.username) } }, icon("copy"), "Copy"))] : null,
     e.tags && e.tags.length ? [el("dt", {}, "Tags"), el("dd", { class: "tags" }, e.tags.map((t) => el("span", {}, t)))] : null,
     el("dt", {}, "Updated"), el("dd", {}, fmt(e.updated_at), " by ", e.updated_by));
   const tabs = el("div", { class: "tabs" },
@@ -269,12 +324,15 @@ async function showEntry(path) {
     el("button", { class: tab === "audit" ? "active" : "", on: { click: () => { tab = "audit"; showEntry(path); } } }, "Audit"));
   const body = tab === "audit" ? await auditView(path) : fieldsView(path, e);
   $("#detail").replaceChildren(
-    el("h2", {}, e.name), meta,
+    el("div", { class: "detail-head" }, kindBadge(e.kind, true),
+      el("div", {}, el("h2", {}, e.name), el("div", { class: "crumb" }, path))),
+    meta,
     el("div", { class: "row" },
-      el("button", { on: { click: () => openEntryDialog(e) } }, "Edit"),
-      el("button", { on: { click: () => openFieldDialog(path) } }, "Add secret field"),
-      el("button", { class: "danger", on: { click: () => deleteEntry(path) } }, "Delete")),
+      el("button", { type: "button", on: { click: () => openEntryDialog(e) } }, icon("edit"), "Edit"),
+      el("button", { type: "button", on: { click: () => openFieldDialog(path) } }, icon("plus"), "Add secret field"),
+      el("button", { type: "button", class: "danger", on: { click: () => deleteEntry(path) } }, icon("trash"), "Delete")),
     tabs, body);
+  $("#detail").scrollTop = 0;
 }
 
 function fieldsView(path, e) {
@@ -292,28 +350,41 @@ function fieldRow(path, field, label) {
     const bytes = await api("GET", "values/" + path, { query: { field } });
     return bytes;
   };
+  const hide = () => {
+    value.textContent = "••••••••";
+    value.classList.add("muted");
+    value.classList.remove("revealed");
+    reveal.replaceChildren(icon("eye"));
+    reveal.title = "Reveal";
+  };
+  const reveal = iconButton("eye", "Reveal", async () => {
+    if (value.classList.contains("revealed")) { clearTimeout(hideTimer); return hide(); }
+    const bytes = await fetchValue();
+    const text = asText(bytes);
+    value.textContent = text === null ? `(binary, ${bytes.length} bytes)` : text;
+    value.classList.remove("muted");
+    value.classList.add("revealed");
+    reveal.replaceChildren(icon("eye-off"));
+    reveal.title = "Hide";
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hide, CLEAR_AFTER_MS);
+  });
   return el("div", { class: "field" },
-    el("span", { class: "fname" }, label),
+    el("span", { class: "fname", title: label }, label),
     value,
-    el("button", { on: { click: async () => {
-      const bytes = await fetchValue();
-      const text = asText(bytes);
-      value.textContent = text === null ? `(binary, ${bytes.length} bytes)` : text;
-      value.classList.remove("muted");
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => { value.textContent = "••••••••"; value.classList.add("muted"); }, CLEAR_AFTER_MS);
-    } } }, "Reveal"),
-    el("button", { on: { click: async () => {
-      const text = asText(await fetchValue());
-      if (text === null) return toast("Binary value: use ks get --to-file");
-      await copyText(text);
-    } } }, "Copy"),
-    field === "_notes" ? null : el("button", { on: { click: () => openFieldDialog(path, field) } }, "Change"),
-    field === "_notes" ? null : el("button", { class: "danger", on: { click: async () => {
-      if (!confirmInline(`Remove field ${field}? Earlier versions are kept.`)) return;
-      await api("DELETE", "values/" + path, { query: { field } });
-      showEntry(path);
-    } } }, "Remove"));
+    el("div", { class: "row" },
+      reveal,
+      iconButton("copy", "Copy", async () => {
+        const text = asText(await fetchValue());
+        if (text === null) return toast("Binary value: use ks get --to-file");
+        await copyText(text);
+      }),
+      field === "_notes" ? null : iconButton("edit", "Change", () => openFieldDialog(path, field)),
+      field === "_notes" ? null : iconButton("trash", "Remove", async () => {
+        if (!confirmInline(`Remove field ${field}? Earlier versions are kept.`)) return;
+        await api("DELETE", "values/" + path, { query: { field } });
+        showEntry(path);
+      }, "danger")));
 }
 
 // confirm() is a modal browser dialog; a plain one is fine for a destructive click.

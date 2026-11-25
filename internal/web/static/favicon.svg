@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="keyshelf favicon">
+  <defs>
+    <linearGradient id="ks-fav-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="45%" stop-color="#4F6AF5"/>
+      <stop offset="100%" stop-color="#14B8A6"/>
+    </linearGradient>
+    <mask id="ks-fav-cutout">
+      <rect width="16" height="16" fill="#fff"/>
+      <rect x="0" y="5" width="16" height="1.25" fill="#000"/>
+      <rect x="0" y="10.5" width="16" height="1.25" fill="#000"/>
+      <path d="M6.7 8.1 A2.4 2.4 0 1 1 9.3 8.1 L10.2 12.5 H5.8 Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="url(#ks-fav-grad)" mask="url(#ks-fav-cutout)"/>
+</svg>

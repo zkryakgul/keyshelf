@@ -4,71 +4,122 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
 <title>keyshelf</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 <script src="app.js" defer></script>
 </head>
 <body>
 
-<section id="screen-loading" class="screen center"><p class="muted">Loading…</p></section>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-token" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M17 6l2.5 2.5M14.5 8.5 16.5 10.5"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" class="fill"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-all" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-login" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
+  <symbol id="i-api-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M15 12v2"/></symbol>
+  <symbol id="i-url" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1-1.5zM9 12h6M9 16h4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16M10.6 6A9 9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.6M6.5 7.6A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9 9 0 0 0 4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M15 5l4 4L8.5 19.5H4.5v-4z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M10 7V4.5h4V7M6.5 7l1 13h9l1-13"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19.5 6v5.5c0 4.5-3.2 8-7.5 9-4.3-1-7.5-4.5-7.5-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-dice" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r=".8" class="fill"/><circle cx="15" cy="15" r=".8" class="fill"/><circle cx="15" cy="9" r=".8" class="fill"/><circle cx="9" cy="15" r=".8" class="fill"/></symbol>
+</svg>
+
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<section id="screen-loading" class="screen center">
+  <div class="loader"><img src="logo.svg" alt="" width="56" height="56"><p class="muted">Loading…</p></div>
+</section>
 
 <section id="screen-uninit" class="screen center" hidden>
-  <div class="card narrow">
-    <h1>keyshelf</h1>
-    <p>This shelf is not initialised yet. On the server, run <code>ks init</code> in a terminal, then reload.</p>
+  <div class="card auth">
+    <img class="auth-logo" src="logo.svg" alt="" width="64" height="64">
+    <h1>Welcome to keyshelf</h1>
+    <p class="muted">This shelf is not set up yet. On the server, run this in your own terminal, then reload:</p>
+    <pre class="cmd">ks init</pre>
   </div>
 </section>
 
 <section id="screen-unseal" class="screen center" hidden>
-  <form id="form-unseal" class="card narrow" autocomplete="off">
-    <h1>keyshelf is sealed</h1>
+  <form id="form-unseal" class="card auth" autocomplete="off">
+    <img class="auth-logo" src="logo.svg" alt="" width="64" height="64">
+    <span class="badge sealed"><svg><use href="#i-lock"/></svg> Sealed</span>
+    <h1>Unlock the shelf</h1>
     <p class="muted">After a restart the key is not in memory. Type the unseal passphrase.</p>
-    <label>Unseal passphrase <input type="password" name="passphrase" required autofocus></label>
+    <label class="field-label">Unseal passphrase
+      <span class="input"><svg><use href="#i-lock"/></svg><input type="password" name="passphrase" required autofocus><button type="button" class="ghost peek" data-peek aria-label="Show"><svg><use href="#i-eye"/></svg></button></span>
+    </label>
     <p class="error" data-error></p>
-    <button type="submit" class="primary">Unseal</button>
+    <button type="submit" class="primary wide">Unseal</button>
     <details>
       <summary>Forgot the passphrase?</summary>
-      <label>Recovery code <input type="text" name="recovery" spellcheck="false"></label>
-      <label>New passphrase <input type="password" name="newpass"></label>
-      <button type="button" id="btn-recover">Unseal with recovery code</button>
+      <label class="field-label">Recovery code <span class="input"><input type="text" name="recovery" spellcheck="false" placeholder="XXXX-XXXX-…"></span></label>
+      <label class="field-label">New passphrase <span class="input"><input type="password" name="newpass"></span></label>
+      <button type="button" id="btn-recover" class="wide">Unseal with recovery code</button>
     </details>
   </form>
 </section>
 
 <section id="screen-login" class="screen center" hidden>
-  <form id="form-login" class="card narrow">
-    <h1>keyshelf</h1>
-    <label>Login password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
-    <label>TOTP code <span class="muted">(if set up)</span> <input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>
+  <form id="form-login" class="card auth">
+    <img class="auth-logo" src="logo.svg" alt="" width="64" height="64">
+    <h1>Welcome back</h1>
+    <p class="muted">Sign in to your shelf.</p>
+    <label class="field-label">Login password
+      <span class="input"><svg><use href="#i-lock"/></svg><input type="password" name="password" autocomplete="current-password" required autofocus><button type="button" class="ghost peek" data-peek aria-label="Show"><svg><use href="#i-eye"/></svg></button></span>
+    </label>
+    <label class="field-label">TOTP code <span class="hint">if set up</span>
+      <span class="input"><svg><use href="#i-shield"/></svg><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></span>
+    </label>
     <p class="error" data-error></p>
-    <button type="submit" class="primary">Log in</button>
+    <button type="submit" class="primary wide">Log in</button>
+    <p class="foot muted">Agents use scoped tokens, never this password.</p>
   </form>
 </section>
 
 <section id="screen-app" class="screen" hidden>
-  <header class="topbar">
-    <button id="btn-menu" class="icon only-mobile" aria-label="Folders">☰</button>
-    <strong class="brand">keyshelf</strong>
-    <input id="search" type="search" placeholder="Search names, URLs, tags…" aria-label="Search">
-    <nav class="actions">
-      <button id="btn-new">New entry</button>
-      <button id="btn-tokens">Tokens</button>
-      <button id="btn-theme" title="Switch light or dark theme">Theme</button>
-      <button id="btn-seal" title="Drop the key from memory">Seal</button>
-      <button id="btn-logout">Log out</button>
-    </nav>
-  </header>
-  <div class="panes">
-    <aside id="tree" class="pane tree" aria-label="Folders"></aside>
-    <main class="pane list">
-      <h2 id="list-title">All entries</h2>
-      <ul id="entries" class="entries"></ul>
-      <p id="list-empty" class="muted" hidden>Nothing here yet.</p>
-    </main>
-    <section id="detail" class="pane detail" aria-live="polite">
-      <p class="muted">Select an entry.</p>
-    </section>
+  <div class="shell">
+    <aside id="tree" class="sidebar" aria-label="Folders">
+      <div class="brand"><img src="logo.svg" alt="" width="30" height="30"><span>keyshelf</span></div>
+      <nav id="tree-nav" class="tree"></nav>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+    <div class="workspace">
+      <header class="topbar">
+        <button id="btn-menu" class="icon only-mobile" aria-label="Folders"><svg><use href="#i-menu"/></svg></button>
+        <label class="search"><svg><use href="#i-search"/></svg><input id="search" type="search" placeholder="Search names, URLs, tags…" aria-label="Search"><kbd>/</kbd></label>
+        <nav class="actions">
+          <button id="btn-new" class="primary"><svg><use href="#i-plus"/></svg><span>New</span></button>
+          <button id="btn-tokens" class="icon" title="Agent tokens"><svg><use href="#i-token"/></svg><span>Tokens</span></button>
+          <button id="btn-theme" class="icon" title="Switch light or dark theme" aria-label="Theme"><svg><use href="#i-theme"/></svg></button>
+          <button id="btn-seal" class="icon" title="Seal: drop the key from memory" aria-label="Seal"><svg><use href="#i-lock"/></svg></button>
+          <button id="btn-logout" class="icon" title="Log out" aria-label="Log out"><svg><use href="#i-logout"/></svg></button>
+        </nav>
+      </header>
+      <div class="panes">
+        <main class="pane list">
+          <div class="list-head"><h2 id="list-title">All entries</h2><span id="list-count" class="count"></span></div>
+          <ul id="entries" class="entries"></ul>
+          <div id="list-empty" class="empty" hidden>
+            <img src="logo.svg" alt="" width="48" height="48">
+            <p>Nothing here yet.</p>
+            <p class="muted">Add an entry with <b>New</b>, or from a terminal: <code>ks put folder/name</code></p>
+          </div>
+        </main>
+        <section id="detail" class="pane detail" aria-live="polite"></section>
+      </div>
+    </div>
   </div>
   <div id="toast" class="toast" hidden></div>
 </section>
@@ -76,20 +127,24 @@
 <dialog id="dlg-entry">
   <form method="dialog" id="form-entry">
     <h2 data-title>New entry</h2>
-    <label>Path <span class="muted">(folder/path/name)</span> <input name="path" required pattern="[A-Za-z0-9._\-]+(/[A-Za-z0-9._\-]+)*" spellcheck="false"></label>
-    <label>Kind
-      <select name="kind"><option>login</option><option>api-key</option><option>url</option><option>note</option></select>
-    </label>
-    <label>URL <input name="url" type="text" spellcheck="false"></label>
-    <label>Username <input name="username" type="text" spellcheck="false" autocomplete="off"></label>
-    <label>Tags <span class="muted">(comma separated)</span> <input name="tags" type="text"></label>
-    <label>Notes <textarea name="notes" rows="4"></textarea></label>
+    <label class="field-label">Path <span class="hint">folder/path/name</span> <input name="path" required pattern="[A-Za-z0-9._\-]+(/[A-Za-z0-9._\-]+)*" spellcheck="false" placeholder="work/acme/db"></label>
+    <div class="grid2">
+      <label class="field-label">Kind
+        <select name="kind"><option>login</option><option>api-key</option><option>url</option><option>note</option></select>
+      </label>
+      <label class="field-label">Username <input name="username" type="text" spellcheck="false" autocomplete="off"></label>
+    </div>
+    <label class="field-label">URL <input name="url" type="text" spellcheck="false" placeholder="https://"></label>
+    <label class="field-label">Tags <span class="hint">comma separated</span> <input name="tags" type="text"></label>
+    <label class="field-label">Notes <textarea name="notes" rows="3"></textarea></label>
     <label class="check"><input type="checkbox" name="secret_notes"> Notes are secret (encrypted, not searchable)</label>
     <fieldset data-newonly>
-      <legend>First secret field <span class="muted">(optional)</span></legend>
-      <label>Field name <input name="field" value="password" spellcheck="false"></label>
-      <label>Value <input name="value" type="password" autocomplete="new-password"></label>
-      <button type="button" data-generate>Generate</button>
+      <legend>First secret field <span class="hint">optional</span></legend>
+      <div class="grid2">
+        <label class="field-label">Field name <input name="field" value="password" spellcheck="false"></label>
+        <label class="field-label">Value <span class="input"><input name="value" type="password" autocomplete="new-password"><button type="button" class="ghost peek" data-peek aria-label="Show"><svg><use href="#i-eye"/></svg></button></span></label>
+      </div>
+      <button type="button" data-generate><svg><use href="#i-dice"/></svg> Generate</button>
     </fieldset>
     <p class="error" data-error></p>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary" data-save>Save</button></menu>
@@ -99,10 +154,10 @@
 <dialog id="dlg-field">
   <form method="dialog" id="form-field">
     <h2>Set a secret field</h2>
-    <label>Field name <input name="field" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" spellcheck="false"></label>
-    <label>Value <input name="value" type="password" autocomplete="new-password"></label>
-    <button type="button" data-generate>Generate 32 characters</button>
-    <p class="muted">A new value keeps the old one as an earlier version.</p>
+    <label class="field-label">Field name <input name="field" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" spellcheck="false"></label>
+    <label class="field-label">Value <span class="input"><input name="value" type="password" autocomplete="new-password"><button type="button" class="ghost peek" data-peek aria-label="Show"><svg><use href="#i-eye"/></svg></button></span></label>
+    <button type="button" data-generate><svg><use href="#i-dice"/></svg> Generate 32 characters</button>
+    <p class="muted small">A new value keeps the old one as an earlier version.</p>
     <p class="error" data-error></p>
     <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary" data-save>Save</button></menu>
   </form>
@@ -112,16 +167,18 @@
   <form method="dialog" id="form-token">
     <h2>Agent tokens</h2>
     <p class="muted">Each token sees only its folders. <b>list</b> shows names, <b>read</b> reveals values, <b>write</b> changes them.</p>
-    <table class="tokens"><thead><tr><th>Name</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody data-rows></tbody></table>
+    <div class="table-wrap"><table class="tokens"><thead><tr><th>Name</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody data-rows></tbody></table></div>
     <h3>New token</h3>
-    <label>Name <input name="name" pattern="[A-Za-z0-9._\-]+" spellcheck="false"></label>
-    <label>Scopes <span class="muted">(one per line, FOLDER:perms; empty folder = everything)</span>
+    <div class="grid2">
+      <label class="field-label">Name <input name="name" pattern="[A-Za-z0-9._\-]+" spellcheck="false" placeholder="claude"></label>
+      <label class="field-label">Expires after <span class="hint">days, empty = never</span> <input name="days" type="number" min="1"></label>
+    </div>
+    <label class="field-label">Scopes <span class="hint">one per line, FOLDER:perms; empty folder = everything</span>
       <textarea name="scopes" rows="3" spellcheck="false" placeholder="work/acme:list,read&#10;home:list,read,write"></textarea></label>
-    <label>Expires after <span class="muted">(days, empty = never)</span> <input name="days" type="number" min="1"></label>
-    <label>Your login password <span class="muted">(asked again for every new token)</span> <input name="password" type="password" autocomplete="current-password"></label>
+    <label class="field-label">Your login password <span class="hint">asked for every new token</span> <input name="password" type="password" autocomplete="current-password"></label>
     <div class="newtoken" data-newtoken hidden>
       <p><b>Copy the token now; it is shown once.</b></p>
-      <code data-secret></code> <button type="button" data-copy>Copy</button>
+      <div class="row"><code data-secret></code> <button type="button" data-copy><svg><use href="#i-copy"/></svg> Copy</button></div>
     </div>
     <p class="error" data-error></p>
     <menu><button value="cancel" formnovalidate>Close</button><button type="button" class="primary" data-create>Create token</button></menu>
