@@ -29,6 +29,7 @@ func rnd(t *testing.T) string {
 }
 
 type harness struct {
+	update    updateEnv
 	t         *testing.T
 	dir       string
 	url       string
@@ -61,6 +62,7 @@ func (h *harness) app() (*app, *bytes.Buffer, *bytes.Buffer) {
 		},
 		exec:      func(argv0 string, argv, env []string) error { h.execd, h.execdEnv = argv, env; return nil },
 		copy:      func(b []byte) error { h.clipboard = b; return nil },
+		update:    h.update,
 		configDir: filepath.Join(h.dir, "config"),
 		dataDir:   filepath.Join(h.dir, "data"),
 	}
@@ -91,7 +93,7 @@ func TestEndToEnd(t *testing.T) {
 
 	h.prompts = []string{pass, pass, pw, pw}
 	out := h.mustKS("init")
-	if !strings.Contains(out, "RECOVERY CODE") {
+	if !strings.Contains(out, "Recovery code") {
 		t.Fatalf("init output: %s", out)
 	}
 

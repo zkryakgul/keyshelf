@@ -17,8 +17,9 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
 - **Addressing**: `folder/path/entry#field`. The last path segment is always the entry; a folder may not hold a
   subfolder and an entry with the same name. Names: `[A-Za-z0-9._-]`, 1–64 chars. `#field` defaults to `password`.
 - **Versions**: every change keeps the previous value (encrypted) from v0.1 on; listing and restore come in v0.2.
-- **Owner**: one person per instance in v0.1, with a login password (Argon2id) and optional TOTP (required when the
-  server listens on a non-loopback address). The schema keeps an `owner_id` column so v0.3 can add users.
+- **Owner**: one person per instance in v0.1, with a login password (Argon2id, min 8 characters; the unseal
+  passphrase stays min 12 because it guards the data key against offline guessing) and optional TOTP (required
+  when the server is reachable from the network). The schema keeps an `owner_id` column so v0.3 can add users.
 - **Tokens**: for agents and scripts. Name, folder scopes, each with permissions from `list` / `read` / `write`,
   optional expiry, last use. Stored only as a SHA-256 hash (tokens are 256-bit random); shown once at creation.
 - **Audit log**: append-only, each row hash-chained to the previous one: actor (owner or token name), action
@@ -87,11 +88,16 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
 - **TOTP**: RFC 6238 (HMAC-SHA1, 30 s, 6 digits) on the standard library's `crypto/hmac`; each code is accepted
   once; the secret is sealed with the DEK.
 - **CLI** `ks`: v0.1 has `init`, `serve`, `unseal [--recovery]`, `seal`, `login`, `logout`, `status`, `ls`, `get`,
-  `put`, `gen`, `run`, `rm`, `token create|ls|revoke`, `audit`, `totp setup`, `backup`. Later: `mv`, `history`,
+  `put`, `gen`, `run`, `rm`, `token create|ls|revoke`, `audit`, `totp setup`, `backup`, `update` (alias `upgrade`:
+  latest GitHub release, SHA256SUMS checked, binary swapped atomically, service restarted only with
+  `--restart`; the release URL is compiled in, not taken from the environment). Later: `mv`, `history`,
   `import`, `export`. Config in `~/.config/keyshelf/config.json` (server URL + agent token, mode 0600);
   `KEYSHELF_TOKEN` and `KEYSHELF_URL` override it. The owner session lives apart in `session.json`; data commands
   use the agent token unless `--owner` is given. Prompts for passphrases and passwords read `/dev/tty` without
   echo and fail without a terminal, so an agent cannot be the one typing them.
+- **Installer**: `scripts/install.sh`, also attached to every release so
+  `curl -fsSL .../releases/latest/download/install.sh | sh` works; POSIX sh, verifies SHA256SUMS, installs
+  `~/.local/bin/ks` and the systemd user unit; re-running it upgrades.
 - **Agent instructions**: a short `AGENTS.md`/Claude skill text that tells agents how to store a new secret
   (`ks put`), how to fetch one without printing it, and never to write secrets elsewhere.
 

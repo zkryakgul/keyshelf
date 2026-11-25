@@ -40,6 +40,8 @@ type app struct {
 	copy           func([]byte) error
 	// configDir and dataDir override the XDG defaults (tests).
 	configDir, dataDir string
+	color              bool      // stdout is a terminal and NO_COLOR is unset
+	update             updateEnv // zero value: the real GitHub releases
 }
 
 const usage = `keyshelf: a small shelf for project secrets.
@@ -52,6 +54,7 @@ Server (run by the owner):
   ks login | ks logout    owner session for the commands marked (owner)
   ks status               server state and which credentials this shell has
   ks backup DEST          copy the encrypted database
+  ks update [--check] [--restart]   install the latest release (alias: ks upgrade)
 
 Secrets (agent token from KEYSHELF_TOKEN or ~/.config/keyshelf/config.json; --owner uses the session):
   ks ls [FOLDER] [-r] [-q TEXT]           list entries (names only)
@@ -81,6 +84,7 @@ func (a *app) run(args []string) int {
 		"login": a.cmdLogin, "logout": a.cmdLogout, "status": a.cmdStatus, "backup": a.cmdBackup,
 		"ls": a.cmdLs, "get": a.cmdGet, "put": a.cmdPut, "gen": a.cmdGen, "run": a.cmdRun, "rm": a.cmdRm,
 		"token": a.cmdToken, "audit": a.cmdAudit, "totp": a.cmdTOTP,
+		"update": a.cmdUpdate, "upgrade": a.cmdUpdate,
 		"version": func([]string) error { fmt.Fprintln(a.stdout, "keyshelf", version); return nil },
 	}
 	cmd, ok := cmds[args[0]]
@@ -330,13 +334,18 @@ func (a *app) cmdInit(args []string) error {
 	if st.Initialized() {
 		return fmt.Errorf("%s is already initialised", path)
 	}
-	fmt.Fprintf(a.stdout, "Creating %s\n\nThe unseal passphrase decrypts everything. You type it after every restart.\n", path)
-	pass, err := a.promptTwice(fmt.Sprintf("Unseal passphrase (min %d characters)", store.MinPassphraseLen))
+	pr := a.printer()
+	pr.title("Setting up keyshelf")
+	pr.info("Database: %s", path)
+	pr.title("1. Unseal passphrase")
+	pr.info("Decrypts everything. You type it after every restart. Min %d characters.", store.MinPassphraseLen)
+	pass, err := a.promptTwice("Unseal passphrase")
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, "\nThe login password opens the web UI and `ks login`. Use a different one.")
-	pw, err := a.promptTwice(fmt.Sprintf("Login password (min %d characters)", store.MinPasswordLen))
+	pr.title("2. Login password")
+	pr.info("Opens the web UI and `ks login`. Must differ from the passphrase. Min %d characters.", store.MinPasswordLen)
+	pw, err := a.promptTwice("Login password")
 	if err != nil {
 		return err
 	}
@@ -353,9 +362,15 @@ func (a *app) cmdInit(args []string) error {
 	if err := st.SetOwnerPassword([]byte(pw)); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "\nRECOVERY CODE (shown once; write it down and keep it offline):\n\n    %s\n\n", code)
-	fmt.Fprintln(a.stdout, "It unseals keyshelf and sets a new passphrase if you forget yours: `ks unseal --recovery`.")
-	fmt.Fprintln(a.stdout, "Next: start the server (`ks serve` or the systemd unit), then `ks unseal`.")
+	pr.ok("keyshelf is initialised")
+	pr.title("3. Recovery code: shown once, write it down and keep it offline")
+	pr.box(code)
+	pr.info("If you forget the passphrase: ks unseal --recovery")
+	pr.title("Next")
+	pr.cmd("ks unseal")
+	pr.cmd("ks login")
+	pr.cmd("ks token create claude --scope :list,read,write --save")
+	pr.info("Web UI: http://%s", defaultListen)
 	return nil
 }
 

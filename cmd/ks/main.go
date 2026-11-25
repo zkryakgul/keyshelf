@@ -26,6 +26,7 @@ func main() {
 		prompt: ttyPrompt,
 		exec:   execReplace,
 		copy:   copyToClipboard,
+		color:  term.IsTerminal(int(os.Stdout.Fd())) && os.Getenv("NO_COLOR") == "",
 	}
 	os.Exit(a.run(os.Args[1:]))
 }

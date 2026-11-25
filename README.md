@@ -17,21 +17,30 @@ what it does not.
 
 ## Install
 
-From a release (Linux or macOS, amd64/arm64):
+Linux or macOS, amd64 or arm64:
 
 ```sh
-tar xzf ks_v0.1.0_linux_amd64.tar.gz
-sha256sum -c SHA256SUMS --ignore-missing          # and optionally: gh attestation verify ks_*.tar.gz -R zkryakgul/keyshelf
+curl -fsSL https://github.com/zkryakgul/keyshelf/releases/latest/download/install.sh | sh
 ```
 
-From source (Go 1.26):
+The script downloads the latest release, checks it against `SHA256SUMS`, installs `ks` into `~/.local/bin` and,
+on Linux, starts it as a systemd user service on `127.0.0.1:7733`. Read it first if you like:
+[scripts/install.sh](scripts/install.sh). Options: `KS_VERSION=v0.1.1`, `KS_BIN_DIR=...`, `KS_NO_SERVICE=1`.
+
+By hand: download `ks_<version>_<os>_<arch>.tar.gz` and `SHA256SUMS` from the
+[releases](https://github.com/zkryakgul/keyshelf/releases), run `sha256sum -c SHA256SUMS --ignore-missing`
+(and optionally `gh attestation verify ks_*.tar.gz -R zkryakgul/keyshelf`), unpack and put `ks` on your PATH.
+From a checkout (Go 1.26): `scripts/install.sh --build`.
+
+## Updating
 
 ```sh
-git clone https://github.com/zkryakgul/keyshelf && cd keyshelf
-scripts/install.sh          # builds ks, installs ~/.local/bin/ks and a systemd user service on 127.0.0.1:7733
+ks update --check      # is there a newer release?
+ks update              # download, verify SHA256SUMS, replace the binary
+ks update --restart    # ... and restart the service (it comes back sealed: ks unseal)
 ```
 
-`scripts/install.sh path/to/ks` installs a downloaded binary instead of building one.
+`ks upgrade` is the same command. Running the install script again also upgrades.
 
 ## First run
 

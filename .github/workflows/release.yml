@@ -28,7 +28,8 @@ jobs:
             cp LICENSE README.md deploy/keyshelf.service "dist/$name/"
             tar -C dist --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -czf "dist/$name.tar.gz" "$name"
           done
-          cd dist && sha256sum *.tar.gz > SHA256SUMS
+          cp scripts/install.sh dist/install.sh
+          cd dist && sha256sum *.tar.gz install.sh > SHA256SUMS
       - name: attest
         uses: actions/attest-build-provenance@v2
         with:
@@ -36,4 +37,4 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --title "keyshelf $GITHUB_REF_NAME" --notes-file docs/release-notes.md --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS dist/install.sh --title "keyshelf $GITHUB_REF_NAME" --notes-file docs/release-notes.md --verify-tag

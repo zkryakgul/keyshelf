@@ -10,8 +10,10 @@ import (
 	"github.com/zkryakgul/keyshelf/internal/vault"
 )
 
-// MinPasswordLen is the minimum owner login password length.
-const MinPasswordLen = 12
+// MinPasswordLen is the minimum owner login password length. It can be shorter than the unseal
+// passphrase: a login guess must go through the server and its rate limit, while the passphrase
+// protects the data key against offline guessing on a stolen disk or backup.
+const MinPasswordLen = 8
 
 var (
 	ErrWeakPassword  = fmt.Errorf("store: password must be at least %d bytes", MinPasswordLen)
