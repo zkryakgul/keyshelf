@@ -120,7 +120,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 	}
 	s.audit(r, "owner", "login", "")
 	if body.Cookie {
-		http.SetCookie(w, &http.Cookie{
+		// Secure is set whenever TLS is in play (directly or behind a proxy); on plain http://127.0.0.1
+		// browsers may drop a Secure cookie, and loopback traffic does not leave the machine.
+		http.SetCookie(w, &http.Cookie{ // #nosec G124 -- see above; HttpOnly and SameSite=Strict always
 			Name: sessionCookie, Value: secret, Path: "/api/", Expires: *tok.ExpiresAt,
 			HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode,
 		})
@@ -138,7 +140,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, tok store.
 		return
 	}
 	s.audit(r, tok.Actor(), "logout", "")
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/api/", MaxAge: -1,
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/api/", MaxAge: -1, // #nosec G124 -- deletes the cookie
 		HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -268,7 +270,8 @@ func (s *Server) handleGetValue(w http.ResponseWriter, r *http.Request, tok stor
 	s.audit(r, tok.Actor(), "value.read", path+"#"+field)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment")
-	w.Write(v)
+	// Served as an attachment with nosniff and CSP default-src 'none': a browser never renders it.
+	w.Write(v) // #nosec G705 -- raw secret bytes are the purpose of this route
 }
 
 func (s *Server) handlePutValue(w http.ResponseWriter, r *http.Request, tok store.Token) {
