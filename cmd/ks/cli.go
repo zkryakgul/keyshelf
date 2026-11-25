@@ -1188,7 +1188,15 @@ func (a *app) cmdTOTP(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "Add this to your authenticator app (it contains the TOTP secret):\n\n%s\n\n", uri)
+	pr := a.printer()
+	pr.title("Add keyshelf to your authenticator app")
+	pr.info("In the app choose \"enter a setup key\" and type the key below (time based, 6 digits, 30 s).")
+	if u, err := url.Parse(uri); err == nil && u.Query().Get("secret") != "" {
+		pr.info("Account: keyshelf")
+		pr.box(groupKey(u.Query().Get("secret")))
+	}
+	pr.info("Or paste this link into an app that accepts otpauth:// links:")
+	fmt.Fprintf(a.stdout, "    %s\n\n", uri)
 	code, err := a.prompt("Code shown by the app: ")
 	if err != nil {
 		return err
@@ -1196,6 +1204,18 @@ func (a *app) cmdTOTP(args []string) error {
 	if err := c.TOTPConfirm(strings.TrimSpace(code)); err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, "TOTP enabled; login now asks for a code.")
+	pr.ok("TOTP enabled; web and network logins now ask for a code")
 	return nil
+}
+
+// groupKey splits a base32 setup key into groups of four for typing.
+func groupKey(k string) string {
+	var b strings.Builder
+	for i, r := range k {
+		if i > 0 && i%4 == 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

@@ -102,6 +102,13 @@ keyshelf listens on `127.0.0.1` only. To reach it from other devices put it behi
 (`ks serve --behind-proxy --host keys.example.org`). Plain HTTP on a non-loopback address is refused, and owner
 login over the network requires TOTP: set it up first on the machine itself with `ks login` and `ks totp setup`.
 
+Example, a VM reached from its host over a host-only network: create a self-signed certificate for the VM's
+address (`openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 -subj /CN=keyshelf
+-addext subjectAltName=IP:192.168.56.10 -keyout key.pem -out cert.pem`), run
+`ks serve --listen 192.168.56.10:7733 --tls-cert cert.pem --tls-key key.pem` (for the systemd unit, a drop-in in
+`~/.config/systemd/user/keyshelf.service.d/` that replaces `ExecStart`), and accept the certificate once in the
+host's browser. Bind the one address you need, not `0.0.0.0`. The CLI on the VM keeps using the Unix socket.
+
 ## Backups
 
 `ks backup ~/keyshelf-$(date +%F).db` copies the encrypted database while the server runs. It is useless without
