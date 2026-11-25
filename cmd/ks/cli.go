@@ -1190,13 +1190,15 @@ func (a *app) cmdTOTP(args []string) error {
 	}
 	pr := a.printer()
 	pr.title("Add keyshelf to your authenticator app")
-	pr.info("In the app choose \"enter a setup key\" and type the key below (time based, 6 digits, 30 s).")
+	pr.info("Scan this code with the app (Google/Microsoft Authenticator, 1Password, Aegis, ...):")
+	fmt.Fprintln(a.stdout)
+	if err := pr.qr(uri); err != nil {
+		pr.warn("cannot draw the QR code: %v", err)
+	}
 	if u, err := url.Parse(uri); err == nil && u.Query().Get("secret") != "" {
-		pr.info("Account: keyshelf")
+		pr.info("Cannot scan? Choose \"enter a setup key\" in the app (account keyshelf, time based) and type:")
 		pr.box(groupKey(u.Query().Get("secret")))
 	}
-	pr.info("Or paste this link into an app that accepts otpauth:// links:")
-	fmt.Fprintf(a.stdout, "    %s\n\n", uri)
 	code, err := a.prompt("Code shown by the app: ")
 	if err != nil {
 		return err

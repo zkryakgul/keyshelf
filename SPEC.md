@@ -52,7 +52,8 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
   `ks put x#password --from-file f` / `--generate 32` / from stdin; never as a command-line argument.
 - **Backups.** `ks backup` writes the encrypted DB; it is useless without the passphrase or recovery code.
 - **Supply chain.** Few dependencies (Go standard library, golang.org/x/crypto, golang.org/x/term for no-echo
-  prompts, modernc.org/sqlite), `govulncheck`, `staticcheck` and `gosec` in CI, the Go toolchain pinned in go.mod,
+  prompts, modernc.org/sqlite, rsc.io/qr for the TOTP setup QR code in the terminal: BSD licence, no
+  dependencies), `govulncheck`, `staticcheck` and `gosec` in CI, the Go toolchain pinned in go.mod,
   reproducible release builds (`-trimpath`, fixed tar metadata), `SHA256SUMS` plus GitHub build-provenance
   attestations (keyless Sigstore signatures, `gh attestation verify`).
 - **Threat model (v0.1)**: protects against a stolen disk/backup, a leaked agent token (limited to its folders,
