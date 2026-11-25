@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -45,31 +46,67 @@ type Options struct {
 	// AllowedHosts are the exact Host header values accepted (e.g. "127.0.0.1:7733"). Anything else is
 	// refused, which defeats DNS rebinding. Required.
 	AllowedHosts []string
-	// RequireTOTP refuses owner login without TOTP; set when listening on a non-loopback address.
+	// RequireTOTP refuses owner login over TCP without TOTP; set when the server is reachable from the
+	// network (non-loopback listen address, a non-loopback --host, or BehindProxy). Login through the
+	// local Unix socket is never affected, so TOTP can always be set up from the machine itself.
 	RequireTOTP bool
-	// SessionTTL is the lifetime of an owner session; default 1 hour.
+	// BehindProxy trusts X-Forwarded-For from a loopback peer for the audit source and marks cookies Secure.
+	BehindProxy bool
+	// SecureCookies marks the session cookie Secure even on plain HTTP (set behind a TLS proxy).
+	SecureCookies bool
+	// SessionTTL is the lifetime of a web (cookie) owner session; default 1 hour.
 	SessionTTL time.Duration
-	Logger     *slog.Logger
+	// CLISessionTTL is the lifetime of a bearer owner session (ks login); default 15 minutes, because
+	// every agent of the same Unix user can read the CLI's session file.
+	CLISessionTTL time.Duration
+	Logger        *slog.Logger
 	// UI is the embedded web interface, served at /. Optional.
 	UI fs.FS
 }
 
 // Server serves the API.
 type Server struct {
-	st     *store.Store
-	opts   Options
-	hosts  map[string]bool
-	now    func() time.Time
-	log    *slog.Logger
-	unseal *limiter
-	login  *limiter
-	credMu sync.Mutex // one password check (64 MiB Argon2id) at a time
+	st    *store.Store
+	opts  Options
+	hosts map[string]bool
+	now   func() time.Time
+	log   *slog.Logger
+	// Credential checks (64 MiB Argon2id each) run one at a time per transport. A request that finds
+	// the transport busy gets 429 at once instead of queueing, so parallel guessing gains nothing.
+	// The local Unix socket has its own mutex and limiters: other Unix users cannot reach it, so they
+	// cannot lock the owner out by failing on purpose over TCP.
+	tcp, local credGate
+}
+
+type credGate struct {
+	mu            sync.Mutex
+	unseal, login *limiter
+}
+
+type ctxKey int
+
+const localKey ctxKey = 1
+
+// isLocal reports whether the request came through the owner-only Unix socket.
+func isLocal(r *http.Request) bool { return r.Context().Value(localKey) != nil }
+
+func (s *Server) gate(r *http.Request) *credGate {
+	if isLocal(r) {
+		return &s.local
+	}
+	return &s.tcp
 }
 
 // New returns a Server for st.
 func New(st *store.Store, opts Options) *Server {
 	if opts.SessionTTL <= 0 {
 		opts.SessionTTL = time.Hour
+	}
+	if opts.CLISessionTTL <= 0 {
+		opts.CLISessionTTL = 15 * time.Minute
+	}
+	if opts.BehindProxy {
+		opts.SecureCookies, opts.RequireTOTP = true, true
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -78,8 +115,10 @@ func New(st *store.Store, opts Options) *Server {
 	for _, h := range opts.AllowedHosts {
 		s.hosts[strings.ToLower(h)] = true
 	}
-	s.unseal = &limiter{now: func() time.Time { return s.now() }}
-	s.login = &limiter{now: func() time.Time { return s.now() }}
+	clock := func() time.Time { return s.now() }
+	for _, g := range []*credGate{&s.tcp, &s.local} {
+		g.unseal, g.login = &limiter{now: clock}, &limiter{now: clock}
+	}
 	return s
 }
 
@@ -106,6 +145,7 @@ func (s *Server) routes() []route {
 		{"POST /api/v1/tokens", ownerOnly, false, s.handleCreateToken},
 		{"DELETE /api/v1/tokens/{id}", ownerOnly, false, s.handleRevokeToken},
 		{"GET /api/v1/audit", ownerOnly, false, s.handleAudit},
+		{"GET /api/v1/audit/verify", ownerOnly, false, s.handleAuditVerify},
 		{"POST /api/v1/passphrase", ownerOnly, false, s.handlePassphrase},
 		{"POST /api/v1/password", ownerOnly, false, s.handlePassword},
 		{"POST /api/v1/totp/setup", ownerOnly, false, s.handleTOTPSetup},
@@ -113,8 +153,22 @@ func (s *Server) routes() []route {
 	}
 }
 
-// Handler returns the API handler.
+// Handler returns the handler for the TCP listener.
 func (s *Server) Handler() http.Handler {
+	return s.hostCheck(s.mux())
+}
+
+// LocalHandler returns the handler for the owner-only Unix socket (mode 0600). Browsers cannot reach a
+// Unix socket, so the Host check is not needed; requests get their own rate limits.
+func (s *Server) LocalHandler() http.Handler {
+	mux := s.mux()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
+		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), localKey, true)))
+	})
+}
+
+func (s *Server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	for _, rt := range s.routes() {
 		mux.Handle(rt.pattern, s.wrap(rt))
@@ -133,16 +187,20 @@ func (s *Server) Handler() http.Handler {
 			files.ServeHTTP(w, r)
 		})
 	}
-	return s.hostCheck(mux)
+	return mux
+}
+
+func setSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 }
 
 func (s *Server) hostCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("Cache-Control", "no-store")
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		setSecurityHeaders(w)
 		if !s.hosts[strings.ToLower(r.Host)] {
 			writeError(w, http.StatusMisdirectedRequest, "host not allowed")
 			return
@@ -216,16 +274,32 @@ func (s *Server) wrap(rt route) http.Handler {
 
 // ---- helpers ----
 
-func source(r *http.Request) string {
+func (s *Server) source(r *http.Request) string {
+	if isLocal(r) {
+		return "socket"
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
+	if s.opts.BehindProxy && isLoopbackIP(host) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[len(parts)-1]) // the address the proxy itself saw
+		}
+	}
 	return host
 }
 
+func isLoopbackIP(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) secureCookie(r *http.Request) bool { return r.TLS != nil || s.opts.SecureCookies }
+
 func (s *Server) audit(r *http.Request, actor, action, target string) {
-	if err := s.st.Audit(store.Event{Actor: actor, Action: action, Target: target, Source: source(r)}); err != nil {
+	if err := s.st.Audit(store.Event{Actor: actor, Action: action, Target: target, Source: s.source(r)}); err != nil {
 		s.log.Error("audit write failed", "action", action, "err", err)
 	}
 }
@@ -278,13 +352,18 @@ func (s *Server) storeError(w http.ResponseWriter, err error) {
 
 // decode reads a JSON body. Requiring application/json means a cross-site HTML form cannot send it
 // without a CORS preflight, which this server never answers.
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+func decode(w http.ResponseWriter, r *http.Request, v any) bool { return decodeLimit(w, r, v, 1<<20) }
+
+// maxCredentialBody bounds requests that carry passphrases or passwords.
+const maxCredentialBody = 4 << 10
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mt != "application/json" {
 		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return false
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -346,15 +425,25 @@ func tooMany(w http.ResponseWriter, wait time.Duration) {
 }
 
 // credential runs check under the limiter and the credential mutex.
-// ok is false when the attempt was refused by the limiter (the response is already written).
-func (s *Server) credential(w http.ResponseWriter, lim *limiter, check func() error) (ok bool, err error) {
+// ok is false when the attempt was refused (the response is already written): either another check is
+// running on this transport, or the limiter is in its back-off. Both are decided under the gate's
+// mutex, so concurrent requests cannot slip past a lockout.
+func (s *Server) credential(w http.ResponseWriter, r *http.Request, kind string, check func() error) (ok bool, err error) {
+	g := s.gate(r)
+	lim := g.login
+	if kind == "unseal" {
+		lim = g.unseal
+	}
+	if !g.mu.TryLock() {
+		tooMany(w, time.Second)
+		return false, nil
+	}
+	defer g.mu.Unlock()
 	if wait, allowed := lim.check(); !allowed {
 		tooMany(w, wait)
 		return false, nil
 	}
-	s.credMu.Lock()
 	err = check()
-	s.credMu.Unlock()
 	if errors.Is(err, store.ErrBadCredentials) {
 		lim.fail()
 	} else if err == nil {

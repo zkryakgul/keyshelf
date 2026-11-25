@@ -52,10 +52,11 @@ var (
 
 // Store is safe for concurrent use.
 type Store struct {
-	db  *sql.DB
-	mu  sync.RWMutex // guards dek; held for reading during every data operation
-	dek []byte
-	now func() time.Time
+	db    *sql.DB
+	mu    sync.RWMutex // guards dek; held for reading during every data operation
+	keyMu sync.Mutex   // serialises re-wrapping of the data key (Recover, ChangePassphrase)
+	dek   []byte
+	now   func() time.Time
 }
 
 // Open opens (or creates) the database at path with mode 0600. The store starts sealed.
@@ -164,14 +165,15 @@ func (s *Store) Init(passphrase []byte) (string, error) {
 	return code, nil
 }
 
-// Unseal loads the data key using the passphrase.
+// Unseal loads the data key using the passphrase. The slow key derivation runs without holding the
+// lock, so failed attempts never stall data requests.
 func (s *Store) Unseal(passphrase []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dek, err := s.unwrap("key_passphrase", passphrase, purposePassphrase)
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.setDEK(dek)
 	return nil
 }
@@ -185,8 +187,8 @@ func (s *Store) Recover(code string, newPassphrase []byte) error {
 	if err != nil {
 		return ErrBadCredentials
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
 	dek, err := s.unwrap("key_recovery", norm, purposeRecovery)
 	if err != nil {
 		return err
@@ -195,6 +197,8 @@ func (s *Store) Recover(code string, newPassphrase []byte) error {
 		vault.Wipe(dek)
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.setDEK(dek)
 	return nil
 }
@@ -204,8 +208,8 @@ func (s *Store) ChangePassphrase(oldPassphrase, newPassphrase []byte) error {
 	if len(newPassphrase) < MinPassphraseLen {
 		return ErrWeakPassphrase
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
 	dek, err := s.unwrap("key_passphrase", oldPassphrase, purposePassphrase)
 	if err != nil {
 		return err

@@ -118,6 +118,7 @@
     <label>Scopes <span class="muted">(one per line, FOLDER:perms; empty folder = everything)</span>
       <textarea name="scopes" rows="3" spellcheck="false" placeholder="work/acme:list,read&#10;home:list,read,write"></textarea></label>
     <label>Expires after <span class="muted">(days, empty = never)</span> <input name="days" type="number" min="1"></label>
+    <label>Your login password <span class="muted">(asked again for every new token)</span> <input name="password" type="password" autocomplete="current-password"></label>
     <div class="newtoken" data-newtoken hidden>
       <p><b>Copy the token now; it is shown once.</b></p>
       <code data-secret></code> <button type="button" data-copy>Copy</button>

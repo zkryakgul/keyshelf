@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -63,7 +64,7 @@ Secrets (agent token from KEYSHELF_TOKEN or ~/.config/keyshelf/config.json; --ow
 Owner:
   ks token create NAME --scope FOLDER:list,read,write [--scope ...] [--ttl 720h] [--save]
   ks token ls | ks token revoke ID
-  ks audit [TARGET] [--limit N]
+  ks audit [TARGET] [--limit N] | ks audit --verify
   ks totp setup
 
 REF is folder/path/entry#field; the field defaults to "password". Values are never printed unless
@@ -177,7 +178,46 @@ func (a *app) serverURL() string {
 	return "http://" + defaultListen
 }
 
-func (a *app) publicClient() *client.Client { return &client.Client{BaseURL: a.serverURL()} }
+// socketPath is the owner-only local socket: $KEYSHELF_SOCKET or $XDG_RUNTIME_DIR/keyshelf/ks.sock.
+func (a *app) socketPath() string {
+	if p := a.getenv("KEYSHELF_SOCKET"); p != "" {
+		return p
+	}
+	if d := a.getenv("XDG_RUNTIME_DIR"); d != "" {
+		return filepath.Join(d, "keyshelf", "ks.sock")
+	}
+	return ""
+}
+
+// checkServerURL refuses to send tokens and values in clear text to another machine.
+func checkServerURL(u string) error {
+	parsed, err := url.Parse(u)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("invalid keyshelf URL %q", u)
+	}
+	if parsed.Scheme == "http" && !isLoopback(parsed.Hostname()) {
+		return fmt.Errorf("refusing plain http to %s: tokens and values would cross the network unencrypted (use https)", parsed.Host)
+	}
+	return nil
+}
+
+// newClient talks to the server: KEYSHELF_URL if set, else the local socket if present, else TCP.
+func (a *app) newClient(token string) (*client.Client, error) {
+	if a.getenv("KEYSHELF_URL") == "" {
+		if sp := a.socketPath(); sp != "" {
+			if fi, err := os.Stat(sp); err == nil && fi.Mode()&os.ModeSocket != 0 {
+				return &client.Client{BaseURL: "http://keyshelf.socket", Socket: sp, Token: token}, nil
+			}
+		}
+	}
+	u := a.serverURL()
+	if err := checkServerURL(u); err != nil {
+		return nil, err
+	}
+	return &client.Client{BaseURL: u, Token: token}, nil
+}
+
+func (a *app) publicClient() (*client.Client, error) { return a.newClient("") }
 
 // agentClient uses KEYSHELF_TOKEN or the config file's token; with owner it uses the owner session.
 func (a *app) agentClient(owner bool) (*client.Client, error) {
@@ -191,7 +231,7 @@ func (a *app) agentClient(owner bool) (*client.Client, error) {
 	if tok == "" {
 		return nil, errors.New("no token: set KEYSHELF_TOKEN or ask the owner for `ks token create NAME --scope ... --save`")
 	}
-	return &client.Client{BaseURL: a.serverURL(), Token: tok}, nil
+	return a.newClient(tok)
 }
 
 func (a *app) sessionPath() string { return filepath.Join(a.cfgDir(), "session.json") }
@@ -205,7 +245,7 @@ func (a *app) ownerClient() (*client.Client, error) {
 	if err != nil || s.Token == "" || time.Now().After(s.ExpiresAt) {
 		return nil, errors.New("no owner session: run `ks login`")
 	}
-	return &client.Client{BaseURL: a.serverURL(), Token: s.Token}, nil
+	return a.newClient(s.Token)
 }
 
 // writePrivate writes data to path with mode 0600, atomically.
@@ -277,6 +317,7 @@ func (a *app) cmdInit(args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
+	syscall.Umask(0o077)
 	path, err := a.dbPath(*db)
 	if err != nil {
 		return err
@@ -338,6 +379,8 @@ func (a *app) cmdServe(args []string) error {
 	cert := fs.String("tls-cert", "", "TLS certificate file")
 	key := fs.String("tls-key", "", "TLS key file")
 	insecure := fs.Bool("insecure-http", false, "allow plain HTTP on a non-loopback address (not recommended)")
+	proxy := fs.Bool("behind-proxy", false, "a TLS reverse proxy forwards to this loopback address: require TOTP, Secure cookies, trust X-Forwarded-For from loopback")
+	sock := fs.String("socket", a.socketPath(), "owner-only Unix socket (mode 0600); empty disables it")
 	var hosts multiFlag
 	fs.Var(&hosts, "host", "extra Host header value to accept, e.g. keys.example.org (repeatable)")
 	if _, err := parse(fs, args); err != nil {
@@ -376,7 +419,17 @@ func (a *app) cmdServe(args []string) error {
 	}
 	defer st.Close()
 	logger := slog.New(slog.NewTextHandler(a.stderr, nil))
-	srv := server.New(st, server.Options{AllowedHosts: allowed, RequireTOTP: !loop, Logger: logger, UI: web.Files()})
+	network := !loop || *proxy
+	for _, h := range hosts {
+		name := h
+		if hh, _, err := net.SplitHostPort(h); err == nil {
+			name = hh
+		}
+		if !isLoopback(name) {
+			network = true // reachable under a public name, e.g. through a proxy
+		}
+	}
+	srv := server.New(st, server.Options{AllowedHosts: allowed, RequireTOTP: network, BehindProxy: *proxy, Logger: logger, UI: web.Files()})
 	hs := &http.Server{
 		Addr: *listen, Handler: srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second,
@@ -384,7 +437,18 @@ func (a *app) cmdServe(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
+	var ls *http.Server
+	if *sock != "" {
+		l, err := listenSocket(*sock)
+		if err != nil {
+			return fmt.Errorf("local socket: %w", err)
+		}
+		ls = &http.Server{Handler: srv.LocalHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+			WriteTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
+		go func() { errc <- ls.Serve(l) }()
+		defer os.Remove(*sock)
+	}
 	go func() {
 		if tls {
 			errc <- hs.ListenAndServeTLS(*cert, *key)
@@ -400,7 +464,8 @@ func (a *app) cmdServe(args []string) error {
 	if !st.Initialized() {
 		state = "not initialised (run ks init)"
 	}
-	logger.Info("keyshelf listening", "url", scheme+"://"+*listen, "db", path, "state", state, "version", version)
+	logger.Info("keyshelf listening", "url", scheme+"://"+*listen, "socket", *sock, "db", path, "state", state,
+		"totp_required", network, "version", version)
 	select {
 	case err := <-errc:
 		return err
@@ -409,7 +474,40 @@ func (a *app) cmdServe(args []string) error {
 	logger.Info("shutting down; sealing")
 	shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if ls != nil {
+		ls.Shutdown(shut)
+	}
 	return hs.Shutdown(shut)
+}
+
+// listenSocket creates the owner-only Unix socket in a 0700 directory, replacing a stale one.
+func listenSocket(path string) (net.Listener, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	err := os.Chmod(filepath.Dir(path), 0o700) // #nosec G302 -- a directory needs the x bit; 0700 is owner-only
+	if err != nil {
+		return nil, err
+	}
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("%s exists and is not a socket", path)
+		}
+		if c, err := net.Dial("unix", path); err == nil {
+			c.Close()
+			return nil, fmt.Errorf("%s is in use: is another ks serve running?", path)
+		}
+		os.Remove(path)
+	}
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
 }
 
 func (a *app) cmdUnseal(args []string) error {
@@ -418,7 +516,10 @@ func (a *app) cmdUnseal(args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	c := a.publicClient()
+	c, err := a.publicClient()
+	if err != nil {
+		return err
+	}
 	if *recovery {
 		code, err := a.prompt("Recovery code: ")
 		if err != nil {
@@ -462,7 +563,10 @@ func (a *app) cmdLogin(args []string) error {
 	if err != nil {
 		return err
 	}
-	c := a.publicClient()
+	c, err := a.publicClient()
+	if err != nil {
+		return err
+	}
 	tok, exp, err := c.Login(pw, "")
 	var ce *client.Error
 	if errors.As(err, &ce) && ce.Status == 401 && strings.Contains(ce.Message, "TOTP") {
@@ -494,7 +598,11 @@ func (a *app) cmdLogout(args []string) error {
 }
 
 func (a *app) cmdStatus(args []string) error {
-	st, err := a.publicClient().Status()
+	pc, err := a.publicClient()
+	if err != nil {
+		return err
+	}
+	st, err := pc.Status()
 	if err != nil {
 		return err
 	}
@@ -505,7 +613,11 @@ func (a *app) cmdStatus(args []string) error {
 	case st.Sealed:
 		state = "sealed"
 	}
-	fmt.Fprintf(a.stdout, "server:  %s (%s)\n", a.serverURL(), state)
+	where := a.serverURL()
+	if pc.Socket != "" {
+		where = pc.Socket
+	}
+	fmt.Fprintf(a.stdout, "server:  %s (%s)\n", where, state)
 	if _, err := a.agentClient(false); err == nil {
 		fmt.Fprintln(a.stdout, "token:   configured")
 	} else {
@@ -527,6 +639,7 @@ func (a *app) cmdBackup(args []string) error {
 	if len(pos) != 1 {
 		return usagef("usage: ks backup DEST")
 	}
+	syscall.Umask(0o077)
 	path, err := a.dbPath(*db)
 	if err != nil {
 		return err
@@ -737,6 +850,14 @@ func (a *app) cmdPut(args []string) error {
 		in := store.EntryInput{}
 		if e, err := c.Entry(path); err == nil {
 			in = store.EntryInput{Kind: e.Kind, URL: e.URL, Username: e.Username, Notes: e.Notes, SecretNotes: e.SecretNotes, Tags: e.Tags, ExpiresAt: e.ExpiresAt}
+			if e.SecretNotes && !meta["notes"] {
+				// Secret notes are not in the metadata; send them back unchanged so they are kept.
+				v, err := c.Value(path, store.NotesField)
+				if err != nil {
+					return fmt.Errorf("keeping the secret notes needs read permission: %w", err)
+				}
+				in.Notes = string(v)
+			}
 		} else if ce := (*client.Error)(nil); !errors.As(err, &ce) || ce.Status != 404 {
 			return err
 		}
@@ -817,7 +938,8 @@ func (a *app) cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	env := os.Environ()
+	set := map[string]string{}
+	var order []string
 	for _, e := range envs {
 		name, refStr, ok := strings.Cut(e, "=")
 		if !ok || name == "" {
@@ -834,9 +956,32 @@ func (a *app) cmdRun(args []string) error {
 		if strings.ContainsRune(string(v), 0) {
 			return fmt.Errorf("%s contains a NUL byte and cannot go into an environment variable", refStr)
 		}
-		env = append(env, name+"="+string(v))
+		if _, dup := set[name]; !dup {
+			order = append(order, name)
+		}
+		set[name] = string(v)
 	}
-	return a.exec(cmd[0], cmd, env)
+	return a.exec(cmd[0], cmd, childEnv(os.Environ(), set, order))
+}
+
+// childEnv drops keyshelf's own credentials and any variable being replaced, then adds the values, so
+// the child sees exactly one NAME (getenv takes the first match) and never the agent token.
+func childEnv(base []string, set map[string]string, order []string) []string {
+	var env []string
+	for _, kv := range base {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "KEYSHELF_") {
+			continue
+		}
+		if _, replaced := set[name]; replaced {
+			continue
+		}
+		env = append(env, kv)
+	}
+	for _, name := range order {
+		env = append(env, name+"="+set[name])
+	}
+	return env
 }
 
 func (a *app) cmdRm(args []string) error {
@@ -911,7 +1056,11 @@ func (a *app) cmdToken(args []string) error {
 			}
 			sc = append(sc, p)
 		}
-		secret, info, err := c.CreateToken(pos[0], sc, *ttl)
+		pw, err := a.prompt("Login password (to confirm): ")
+		if err != nil {
+			return err
+		}
+		secret, info, err := c.CreateToken(pos[0], sc, *ttl, pw)
 		if err != nil {
 			return err
 		}
@@ -973,6 +1122,7 @@ func fmtTime(t *time.Time) string {
 func (a *app) cmdAudit(args []string) error {
 	fs := a.flags("audit")
 	limit := fs.Int("limit", 50, "number of events")
+	verify := fs.Bool("verify", false, "check the hash chain of the whole log")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -980,6 +1130,17 @@ func (a *app) cmdAudit(args []string) error {
 	c, err := a.ownerClient()
 	if err != nil {
 		return err
+	}
+	if *verify {
+		ok, msg, err := c.AuditVerify()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("audit log check FAILED: %s", msg)
+		}
+		fmt.Fprintln(a.stdout, "Audit log hash chain is intact (this cannot detect the newest rows being cut off).")
+		return nil
 	}
 	target := ""
 	if len(pos) > 0 {
@@ -1004,7 +1165,11 @@ func (a *app) cmdTOTP(args []string) error {
 	if err != nil {
 		return err
 	}
-	uri, err := c.TOTPSetup()
+	pw, err := a.prompt("Login password (to confirm): ")
+	if err != nil {
+		return err
+	}
+	uri, err := c.TOTPSetup(pw)
 	if err != nil {
 		return err
 	}

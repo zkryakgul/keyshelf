@@ -39,17 +39,21 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
 - **Network.** Listens on `127.0.0.1:7733` by default. Every request's `Host` header must match the configured
   listen names (DNS-rebinding defence); no CORS. For other devices TLS is required; the server refuses non-loopback
   plain HTTP unless an explicit flag is set.
-- **Web.** Session cookie `HttpOnly; Secure; SameSite=Strict`, CSRF token on every change, strict CSP (no inline
-  script, no third-party origins), rate limit and lockout for login **and** unseal attempts (other local users can
-  reach loopback), idle session timeout, values revealed only on click and cleared from the clipboard after 30 s.
+- **Web.** Session cookie `HttpOnly; SameSite=Strict`, plus `Secure` whenever the page is served over TLS (browsers
+  may drop `Secure` cookies on plain `http://127.0.0.1`), CSRF header on every change, strict CSP (no inline
+  script or style, no third-party origins), rate limit and lockout for login **and** unseal attempts (other local
+  users can reach loopback), sessions end after 1 hour, values revealed only on click and hidden again and
+  cleared from the clipboard after 30 s.
 - **Tokens.** Least privilege: a token sees only its folders. Reading a value is a separate permission from listing
   names (`list`, `read`, `write`). Tokens can be revoked at once; optional expiry; last-use time shown.
 - **Agent safety.** The CLI never prints a secret value unless `--reveal` is given. Default ways out:
   `ks get x#password --to-file path` (mode 0600), `ks run --env DB_PASS=x#password -- cmd`, `ks get ... --copy`.
   `ks put x#password --from-file f` / `--generate 32` / from stdin; never as a command-line argument.
 - **Backups.** `ks backup` writes the encrypted DB; it is useless without the passphrase or recovery code.
-- **Supply chain.** Few dependencies (Go standard library, golang.org/x/crypto, modernc.org/sqlite),
-  `govulncheck` and `gosec` in CI, reproducible release builds, checksums signed.
+- **Supply chain.** Few dependencies (Go standard library, golang.org/x/crypto, golang.org/x/term for no-echo
+  prompts, modernc.org/sqlite), `govulncheck`, `staticcheck` and `gosec` in CI, the Go toolchain pinned in go.mod,
+  reproducible release builds (`-trimpath`, fixed tar metadata), `SHA256SUMS` plus GitHub build-provenance
+  attestations (keyless Sigstore signatures, `gh attestation verify`).
 - **Threat model (v0.1)**: protects against a stolen disk/backup, a leaked agent token (limited to its folders,
   visible in the audit log), and web attacks from other sites (CSRF, DNS rebinding). It does **not** protect
   against a compromised host while unsealed, nor against a malicious process running as the same Unix user (it can
@@ -70,14 +74,24 @@ Non-goals for v0.x: browser autofill, mobile apps, SSO, clustering/HA, sharing w
     `totp/setup`, `totp/confirm`.
   - JSON bodies must be `application/json` (a cross-site form cannot send that without a preflight, which is
     never answered). Outside a scope the answer is `403` whether or not the entry exists.
-- **Owner sessions.** `POST login` returns an owner token valid for 1 hour. Because agents run as the same Unix
-  user, the CLI keeps it apart from the agent token and the owner should log out when done; the web UI uses
-  the same sessions through a cookie.
+- **Owner sessions.** `POST login` returns an owner session: 15 minutes for the CLI (bearer), 1 hour for the web
+  UI (cookie). Because agents run as the same Unix user, the CLI keeps it apart from the agent token, and
+  high-impact actions (token create, TOTP setup, password and passphrase change) need the password again
+  (step-up). A password change revokes every other owner session.
+- **Local socket.** `ks serve` also listens on `$XDG_RUNTIME_DIR/keyshelf/ks.sock` (mode 0600, directory 0700). The
+  CLI prefers it. It has its own rate limits, so other Unix users who fail on purpose over TCP cannot lock the
+  owner out; login over it never needs TOTP, so TOTP can be set up on the machine itself.
+- **Credential checks** (unseal, recover, login, TOTP, step-up) run one at a time per transport; a request that
+  finds one running gets 429 at once; bodies are capped at 4 KiB; after 5 failures each try waits 2^(n-5) s (max
+  15 min). `--behind-proxy` (or any non-loopback `--host`) requires TOTP over TCP and marks cookies Secure.
 - **TOTP**: RFC 6238 (HMAC-SHA1, 30 s, 6 digits) on the standard library's `crypto/hmac`; each code is accepted
   once; the secret is sealed with the DEK.
-- **CLI** `ks`: v0.1 has `init`, `serve`, `unseal`, `seal`, `ls`, `get`, `put`, `gen`, `run`, `rm`,
-  `token create|ls|revoke`, `backup`. Later: `mv`, `history`, `import`, `export`.
-  Config in `~/.config/keyshelf/config.json` (server URL + token, mode 0600); `KEYSHELF_TOKEN` overrides the token.
+- **CLI** `ks`: v0.1 has `init`, `serve`, `unseal [--recovery]`, `seal`, `login`, `logout`, `status`, `ls`, `get`,
+  `put`, `gen`, `run`, `rm`, `token create|ls|revoke`, `audit`, `totp setup`, `backup`. Later: `mv`, `history`,
+  `import`, `export`. Config in `~/.config/keyshelf/config.json` (server URL + agent token, mode 0600);
+  `KEYSHELF_TOKEN` and `KEYSHELF_URL` override it. The owner session lives apart in `session.json`; data commands
+  use the agent token unless `--owner` is given. Prompts for passphrases and passwords read `/dev/tty` without
+  echo and fail without a terminal, so an agent cannot be the one typing them.
 - **Agent instructions**: a short `AGENTS.md`/Claude skill text that tells agents how to store a new secret
   (`ks put`), how to fetch one without printing it, and never to write secrets elsewhere.
 

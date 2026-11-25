@@ -24,6 +24,10 @@ const (
 	minTimeCost  = 1
 	minMemoryKiB = 64 * 1024
 	minThreads   = 1
+	// Ceilings stop a tampered database from making unseal exhaust memory or CPU.
+	maxTimeCost  = 64
+	maxMemoryKiB = 4 * 1024 * 1024 // 4 GiB
+	maxThreads   = 64
 )
 
 // ErrDecrypt is returned for every failure to open a sealed value: wrong key, wrong associated data,
@@ -118,6 +122,8 @@ func (p KDFParams) Validate() error {
 		return errors.New("vault: argon2 threads too low")
 	case len(p.Salt) < SaltSize:
 		return errors.New("vault: salt too short")
+	case p.Time > maxTimeCost || p.MemoryKiB > maxMemoryKiB || p.Threads > maxThreads || len(p.Salt) > 64:
+		return errors.New("vault: argon2 parameters above the ceiling")
 	}
 	return nil
 }

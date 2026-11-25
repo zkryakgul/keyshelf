@@ -3,9 +3,11 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,7 +20,9 @@ import (
 type Client struct {
 	BaseURL string
 	Token   string
-	HTTP    *http.Client
+	// Socket, when set, sends every request over this Unix socket (the owner-only local listener).
+	Socket string
+	HTTP   *http.Client
 }
 
 // Error is a non-2xx answer from the server.
@@ -31,6 +35,15 @@ func (e *Error) Error() string { return fmt.Sprintf("%s (HTTP %d)", e.Message, e
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
+		return c.HTTP
+	}
+	if c.Socket != "" {
+		sock := c.Socket
+		c.HTTP = &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+			},
+		}}
 		return c.HTTP
 	}
 	return &http.Client{Timeout: 60 * time.Second}
@@ -182,12 +195,13 @@ func (c *Client) Tokens() ([]store.Token, error) {
 	return out, c.json("GET", "tokens", nil, nil, &out)
 }
 
-func (c *Client) CreateToken(name string, scopes []store.Scope, ttl time.Duration) (string, store.Token, error) {
+// CreateToken needs the owner's login password again (step-up).
+func (c *Client) CreateToken(name string, scopes []store.Scope, ttl time.Duration, password string) (string, store.Token, error) {
 	var out struct {
 		Token string      `json:"token"`
 		Info  store.Token `json:"info"`
 	}
-	err := c.json("POST", "tokens", nil, map[string]any{"name": name, "scopes": scopes, "ttl_seconds": int64(ttl.Seconds())}, &out)
+	err := c.json("POST", "tokens", nil, map[string]any{"name": name, "scopes": scopes, "ttl_seconds": int64(ttl.Seconds()), "password": password}, &out)
 	return out.Token, out.Info, err
 }
 
@@ -207,11 +221,21 @@ func (c *Client) Audit(target string, limit int) ([]store.Event, error) {
 	return out, c.json("GET", "audit", q, nil, &out)
 }
 
-func (c *Client) TOTPSetup() (string, error) {
+func (c *Client) TOTPSetup(password string) (string, error) {
 	var out struct {
 		URI string `json:"otpauth_uri"`
 	}
-	return out.URI, c.json("POST", "totp/setup", nil, nil, &out)
+	return out.URI, c.json("POST", "totp/setup", nil, map[string]string{"password": password}, &out)
+}
+
+// AuditVerify checks the audit log's hash chain on the server.
+func (c *Client) AuditVerify() (bool, string, error) {
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	err := c.json("GET", "audit/verify", nil, nil, &out)
+	return out.OK, out.Error, err
 }
 
 func (c *Client) TOTPConfirm(code string) error {

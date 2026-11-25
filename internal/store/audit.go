@@ -88,8 +88,9 @@ func (s *Store) ListAudit(f AuditFilter) ([]Event, error) {
 	return out, rows.Err()
 }
 
-// VerifyAudit walks the whole chain. It detects edited, removed or reordered rows; it cannot stop
-// someone with write access to the file from rebuilding the chain from scratch.
+// VerifyAudit walks the whole chain. It detects edited, reordered or removed rows in the middle of the
+// log. It cannot detect the newest rows being cut off, nor someone with write access to the file
+// rebuilding the chain from scratch: the chain has no key, because events are written while sealed too.
 func (s *Store) VerifyAudit() error {
 	rows, err := s.db.Query(`SELECT id, at, actor, action, target, source, prev_hash, hash FROM audit ORDER BY id`)
 	if err != nil {

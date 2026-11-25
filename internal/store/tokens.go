@@ -218,6 +218,12 @@ func (s *Store) ListAgentTokens() ([]Token, error) {
 	return out, rows.Err()
 }
 
+// RevokeOwnerSessions revokes every owner session except keepID (0 keeps none).
+func (s *Store) RevokeOwnerSessions(keepID int64) error {
+	_, err := s.db.Exec(`UPDATE tokens SET revoked_at = ? WHERE kind = 'owner' AND revoked_at IS NULL AND id <> ?`, s.now().Unix(), keepID)
+	return err
+}
+
 // RevokeToken revokes a token at once.
 func (s *Store) RevokeToken(id int64) error {
 	res, err := s.db.Exec(`UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, s.now().Unix(), id)

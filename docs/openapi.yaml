@@ -1,0 +1,251 @@
+openapi: 3.1.0
+info:
+  title: keyshelf API
+  version: "1"
+  description: |
+    keyshelf's HTTP API. Every request's Host header must be one of the server's allowed hosts. JSON bodies must be
+    sent as `application/json`. Values are raw bytes (`application/octet-stream`).
+    Agent tokens and owner sessions use `Authorization: Bearer ks_...`; the web UI uses the `ks_session` cookie
+    plus an `X-CSRF-Token` header on every non-GET request. While the server is sealed most routes answer 503.
+  license: { name: Apache-2.0 }
+servers:
+  - url: http://127.0.0.1:7733/api/v1
+security:
+  - bearer: []
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+    cookie: { type: apiKey, in: cookie, name: ks_session }
+  parameters:
+    path:
+      name: path
+      in: path
+      required: true
+      description: folder/path/entry; segments match [A-Za-z0-9._-]{1,64}
+      schema: { type: string }
+    field:
+      name: field
+      in: query
+      description: secret field name; default "password"
+      schema: { type: string, default: password }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: string } } }
+  schemas:
+    Folder:
+      type: object
+      properties: { id: { type: integer }, path: { type: string } }
+    Entry:
+      type: object
+      properties:
+        id: { type: integer }
+        folder: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [login, api-key, url, note] }
+        url: { type: string }
+        username: { type: string }
+        notes: { type: string, description: empty when secret_notes is true }
+        secret_notes: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        expires_at: { type: string, format: date-time }
+        fields: { type: array, items: { type: string }, description: names of the live secret fields }
+        created_by: { type: string }
+        updated_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EntryInput:
+      type: object
+      description: Replaces the entry's metadata; fields are kept.
+      properties:
+        kind: { type: string, enum: [login, api-key, url, note] }
+        url: { type: string }
+        username: { type: string }
+        notes: { type: string }
+        secret_notes: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        expires_at: { type: string, format: date-time }
+    Scope:
+      type: object
+      properties:
+        folder: { type: string, description: '"" is the whole shelf; covers subfolders' }
+        perms: { type: array, items: { type: string, enum: [list, read, write] } }
+    Token:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        kind: { type: string, enum: [agent, owner] }
+        scopes: { type: array, items: { $ref: "#/components/schemas/Scope" } }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        at: { type: string, format: date-time }
+        actor: { type: string }
+        action: { type: string }
+        target: { type: string }
+        source: { type: string }
+paths:
+  /status:
+    get:
+      summary: Seal state (public)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { initialized: { type: boolean }, sealed: { type: boolean } } }
+  /unseal:
+    post:
+      summary: Unseal with the passphrase (public, rate-limited)
+      security: []
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { passphrase: { type: string } } } } }
+      responses: { "200": { description: Unsealed }, "401": { $ref: "#/components/responses/Error" }, "429": { $ref: "#/components/responses/Error" } }
+  /recover:
+    post:
+      summary: Unseal with the recovery code and set a new passphrase (public, rate-limited)
+      security: []
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { recovery_code: { type: string }, new_passphrase: { type: string } } } } }
+      responses: { "200": { description: Unsealed }, "401": { $ref: "#/components/responses/Error" }, "429": { $ref: "#/components/responses/Error" } }
+  /login:
+    post:
+      summary: Owner login (public, rate-limited). Returns a 1-hour owner session.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string }
+                totp: { type: string }
+                cookie: { type: boolean, description: set the ks_session cookie and return a CSRF token instead of the token }
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema: { type: object, properties: { token: { type: string }, csrf: { type: string }, expires_at: { type: string, format: date-time } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /logout:
+    post:
+      summary: Revoke the calling token or session
+      responses: { "204": { description: Revoked } }
+  /session:
+    get:
+      summary: Owner session info and CSRF token (owner)
+      security: [{ cookie: [] }, { bearer: [] }]
+      responses: { "200": { description: OK } }
+  /folders:
+    get:
+      summary: Folders the token may list
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Folder" } } } } }
+  /entries:
+    get:
+      summary: List or search entries (filtered to folders with list permission)
+      parameters:
+        - { name: folder, in: query, schema: { type: string } }
+        - { name: recursive, in: query, schema: { type: string, enum: ["1", "true"] } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Entry" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /entries/{path}:
+    parameters: [{ $ref: "#/components/parameters/path" }]
+    get:
+      summary: Entry metadata (list)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Create the entry or replace its metadata (write)
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/EntryInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Entry" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete the entry (write; rows are kept for restore)
+      responses: { "204": { description: Deleted }, "403": { $ref: "#/components/responses/Error" } }
+  /values/{path}:
+    parameters: [{ $ref: "#/components/parameters/path" }, { $ref: "#/components/parameters/field" }]
+    get:
+      summary: Read a secret value (read; audited)
+      responses:
+        "200": { description: The value, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Store a new version of a value (write; max 64 KiB; creates the entry if needed)
+      requestBody: { content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses: { "204": { description: Stored }, "403": { $ref: "#/components/responses/Error" }, "413": { $ref: "#/components/responses/Error" } }
+    delete:
+      summary: Remove a field (write; earlier versions are kept)
+      responses: { "204": { description: Removed }, "403": { $ref: "#/components/responses/Error" } }
+  /seal:
+    post:
+      summary: Drop the data key from memory (owner)
+      responses: { "200": { description: Sealed } }
+  /tokens:
+    get:
+      summary: List agent tokens (owner)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Token" } } } } }
+    post:
+      summary: Create an agent token (owner); the secret is returned once
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                scopes: { type: array, items: { $ref: "#/components/schemas/Scope" } }
+                ttl_seconds: { type: integer, description: 0 = no expiry }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { type: object, properties: { token: { type: string }, info: { $ref: "#/components/schemas/Token" } } } } }
+  /tokens/{id}:
+    delete:
+      summary: Revoke a token (owner)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses: { "204": { description: Revoked } }
+  /audit:
+    get:
+      summary: Audit events, newest first (owner)
+      parameters:
+        - { name: target, in: query, schema: { type: string }, description: entry path; also matches path#field }
+        - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } }
+  /passphrase:
+    post:
+      summary: Change the unseal passphrase (owner)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { old: { type: string }, new: { type: string } } } } } }
+      responses: { "204": { description: Changed } }
+  /password:
+    post:
+      summary: Change the owner login password (owner)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { old: { type: string }, new: { type: string } } } } } }
+      responses: { "204": { description: Changed } }
+  /totp/setup:
+    post:
+      summary: Start TOTP setup; returns an otpauth:// URI (owner)
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { otpauth_uri: { type: string } } } } } } }
+  /totp/confirm:
+    post:
+      summary: Confirm TOTP with a code from the app (owner)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { code: { type: string } } } } } }
+      responses: { "204": { description: Enabled } }

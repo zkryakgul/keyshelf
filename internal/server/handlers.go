@@ -20,10 +20,15 @@ func (s *Server) handleUnseal(w http.ResponseWriter, r *http.Request, _ store.To
 	var body struct {
 		Passphrase string `json:"passphrase"`
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	ok, err := s.credential(w, s.unseal, func() error { return s.st.Unseal([]byte(body.Passphrase)) })
+	if s.st.Initialized() && !s.st.Sealed() {
+		// Already unsealed: answer without running the key derivation.
+		writeError(w, http.StatusConflict, "already unsealed")
+		return
+	}
+	ok, err := s.credential(w, r, "unseal", func() error { return s.st.Unseal([]byte(body.Passphrase)) })
 	if !ok {
 		return
 	}
@@ -43,10 +48,10 @@ func (s *Server) handleRecover(w http.ResponseWriter, r *http.Request, _ store.T
 		RecoveryCode  string `json:"recovery_code"`
 		NewPassphrase string `json:"new_passphrase"`
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	ok, err := s.credential(w, s.unseal, func() error {
+	ok, err := s.credential(w, r, "unseal", func() error {
 		return s.st.Recover(body.RecoveryCode, []byte(body.NewPassphrase))
 	})
 	if !ok {
@@ -69,14 +74,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 		TOTP     string `json:"totp"`
 		Cookie   bool   `json:"cookie"` // web UI: set an HttpOnly cookie instead of returning the token
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	if s.opts.RequireTOTP && !s.st.TOTPEnabled() {
-		writeError(w, http.StatusForbidden, "TOTP must be set up (from the local machine) before logging in over the network")
+	if s.opts.RequireTOTP && !isLocal(r) && !s.st.TOTPEnabled() {
+		writeError(w, http.StatusForbidden, "TOTP must be set up before logging in over the network: on the server run `ks login` then `ks totp setup` (they use the local socket)")
 		return
 	}
-	ok, err := s.credential(w, s.login, func() error {
+	ok, err := s.credential(w, r, "login", func() error {
 		if err := s.st.CheckOwnerPassword([]byte(body.Password)); err != nil {
 			return err
 		}
@@ -104,7 +109,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 		s.storeError(w, err)
 		return
 	}
-	secret, tok, err := s.st.CreateOwnerSession(s.opts.SessionTTL)
+	ttl := s.opts.CLISessionTTL
+	if body.Cookie {
+		ttl = s.opts.SessionTTL
+	}
+	secret, tok, err := s.st.CreateOwnerSession(ttl)
 	if err != nil {
 		s.storeError(w, err)
 		return
@@ -113,7 +122,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ store.Tok
 	if body.Cookie {
 		http.SetCookie(w, &http.Cookie{
 			Name: sessionCookie, Value: secret, Path: "/api/", Expires: *tok.ExpiresAt,
-			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode,
+			HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode,
 		})
 		writeJSON(w, http.StatusOK, map[string]any{"csrf": csrfFor(secret), "expires_at": tok.ExpiresAt})
 		return
@@ -130,7 +139,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, tok store.
 	}
 	s.audit(r, tok.Actor(), "logout", "")
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/api/", MaxAge: -1,
-		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+		HttpOnly: true, Secure: s.secureCookie(r), SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -325,8 +334,12 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, tok s
 		Name       string        `json:"name"`
 		Scopes     []store.Scope `json:"scopes"`
 		TTLSeconds int64         `json:"ttl_seconds"`
+		Password   string        `json:"password"` // step-up: an agent holding the owner session cannot create tokens
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
+		return
+	}
+	if !s.stepUp(w, r, body.Password) {
 		return
 	}
 	if body.TTLSeconds < 0 {
@@ -366,15 +379,46 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, tok store.T
 	writeJSON(w, http.StatusOK, events)
 }
 
+// stepUp re-checks the owner's login password for high-impact actions. An owner session alone is not
+// enough: agents of the same Unix user can read the CLI's session file.
+func (s *Server) stepUp(w http.ResponseWriter, r *http.Request, password string) bool {
+	ok, err := s.credential(w, r, "login", func() error { return s.st.CheckOwnerPassword([]byte(password)) })
+	if !ok {
+		return false
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrBadCredentials) {
+			s.audit(r, "owner", "stepup.fail", r.URL.Path)
+			writeError(w, http.StatusUnauthorized, "this action needs the owner's login password")
+			return false
+		}
+		s.storeError(w, err)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleAuditVerify(w http.ResponseWriter, r *http.Request, tok store.Token) {
+	if err := s.st.VerifyAudit(); err != nil {
+		if errors.Is(err, store.ErrAuditTampered) {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		s.storeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handlePassphrase(w http.ResponseWriter, r *http.Request, tok store.Token) {
 	var body struct {
 		Old string `json:"old"`
 		New string `json:"new"`
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	ok, err := s.credential(w, s.unseal, func() error {
+	ok, err := s.credential(w, r, "unseal", func() error {
 		return s.st.ChangePassphrase([]byte(body.Old), []byte(body.New))
 	})
 	if !ok {
@@ -393,10 +437,10 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request, tok stor
 		Old string `json:"old"`
 		New string `json:"new"`
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	ok, err := s.credential(w, s.login, func() error {
+	ok, err := s.credential(w, r, "login", func() error {
 		if err := s.st.CheckOwnerPassword([]byte(body.Old)); err != nil {
 			return err
 		}
@@ -409,11 +453,21 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request, tok stor
 		s.storeError(w, err)
 		return
 	}
+	if err := s.st.RevokeOwnerSessions(tok.ID); err != nil {
+		s.storeError(w, err)
+		return
+	}
 	s.audit(r, tok.Actor(), "password.change", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, tok store.Token) {
+	var body struct {
+		Password string `json:"password"`
+	}
+	if !decodeLimit(w, r, &body, maxCredentialBody) || !s.stepUp(w, r, body.Password) {
+		return
+	}
 	uri, err := s.st.BeginTOTP()
 	if err != nil {
 		s.storeError(w, err)
@@ -426,10 +480,10 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request, tok s
 	var body struct {
 		Code string `json:"code"`
 	}
-	if !decode(w, r, &body) {
+	if !decodeLimit(w, r, &body, maxCredentialBody) {
 		return
 	}
-	ok, err := s.credential(w, s.login, func() error { return s.st.ConfirmTOTP(body.Code) })
+	ok, err := s.credential(w, r, "login", func() error { return s.st.ConfirmTOTP(body.Code) })
 	if !ok {
 		return
 	}

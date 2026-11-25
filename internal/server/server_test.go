@@ -143,9 +143,10 @@ func TestEveryRouteRefusesOutOfScopeTokens(t *testing.T) {
 		"POST /api/v1/tokens":        {{"POST", "/api/v1/tokens", map[string]any{"name": "x", "scopes": []store.Scope{{Folder: "", Perms: []string{"read"}}}}, e.rootAgent, 403, ""}},
 		"DELETE /api/v1/tokens/{id}": {{"DELETE", "/api/v1/tokens/1", nil, e.rootAgent, 403, ""}},
 		"GET /api/v1/audit":          {{"GET", "/api/v1/audit", nil, e.rootAgent, 403, ""}},
+		"GET /api/v1/audit/verify":   {{"GET", "/api/v1/audit/verify", nil, e.rootAgent, 403, ""}},
 		"POST /api/v1/passphrase":    {{"POST", "/api/v1/passphrase", map[string]string{"old": e.passphrase, "new": "n-" + randHex(t)}, e.rootAgent, 403, ""}},
 		"POST /api/v1/password":      {{"POST", "/api/v1/password", map[string]string{"old": e.password, "new": "n-" + randHex(t)}, e.rootAgent, 403, ""}},
-		"POST /api/v1/totp/setup":    {{"POST", "/api/v1/totp/setup", nil, e.rootAgent, 403, ""}},
+		"POST /api/v1/totp/setup":    {{"POST", "/api/v1/totp/setup", map[string]string{"password": e.password}, e.rootAgent, 403, ""}},
 		"POST /api/v1/totp/confirm":  {{"POST", "/api/v1/totp/confirm", map[string]string{"code": "123456"}, e.rootAgent, 403, ""}},
 		// Logout only ever revokes the caller's own token; checked in TestLogoutRevokesOnlyItself.
 		"POST /api/v1/logout": {},
@@ -324,7 +325,7 @@ func TestLoginTokensAndRevoke(t *testing.T) {
 		t.Fatalf("login: %d", w.Code)
 	}
 	w = e.do("POST", "/api/v1/tokens", login.Token, map[string]any{
-		"name": "claude", "ttl_seconds": 3600,
+		"name": "claude", "ttl_seconds": 3600, "password": e.password,
 		"scopes": []store.Scope{{Folder: "work", Perms: []string{"read"}}},
 	})
 	var created struct {
@@ -376,7 +377,7 @@ func TestTOTPLogin(t *testing.T) {
 	if w := e.do("POST", "/api/v1/login", "", map[string]string{"password": e.password}); w.Code != 403 {
 		t.Fatalf("network login without TOTP set up: %d", w.Code)
 	}
-	w := e.do("POST", "/api/v1/totp/setup", e.owner, nil)
+	w := e.do("POST", "/api/v1/totp/setup", e.owner, map[string]string{"password": e.password})
 	var setup struct {
 		URI string `json:"otpauth_uri"`
 	}
@@ -461,5 +462,132 @@ func TestWebCookieSessionAndCSRF(t *testing.T) {
 	}
 	if c := call("GET", "/api/v1/folders", "", nil); c != 401 {
 		t.Fatalf("cookie after logout: %d", c)
+	}
+}
+
+// Parallel wrong guesses must not get past the lockout (review finding 1).
+func TestParallelGuessesAreRefused(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.st.Seal()
+	const n = 40
+	codes := make(chan int, n)
+	start := make(chan struct{})
+	for range n {
+		go func() {
+			<-start
+			codes <- e.do("POST", "/api/v1/unseal", "", map[string]string{"passphrase": "wrong-" + randHex(t)}).Code
+		}()
+	}
+	close(start)
+	evaluated := 0
+	for range n {
+		if c := <-codes; c == 401 {
+			evaluated++
+		} else if c != 429 {
+			t.Fatalf("unexpected status %d", c)
+		}
+	}
+	if evaluated > 6 {
+		t.Fatalf("%d of %d parallel guesses were evaluated", evaluated, n)
+	}
+}
+
+func TestUnsealWhenUnsealedSkipsKDF(t *testing.T) {
+	e := newEnv(t, Options{})
+	if w := e.do("POST", "/api/v1/unseal", "", map[string]string{"passphrase": "x"}); w.Code != 409 {
+		t.Fatalf("unseal while unsealed: %d", w.Code)
+	}
+	big := map[string]string{"passphrase": strings.Repeat("a", 8<<10)}
+	e.st.Seal()
+	if w := e.do("POST", "/api/v1/unseal", "", big); w.Code != 400 {
+		t.Fatalf("oversized passphrase body: %d", w.Code)
+	}
+}
+
+// A TCP lockout (anyone on the machine can cause one) must not lock the owner's Unix socket (finding 3).
+func TestLocalSocketHasItsOwnLimiter(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.st.Seal()
+	for range 6 {
+		e.do("POST", "/api/v1/unseal", "", map[string]string{"passphrase": "wrong-" + randHex(t)})
+	}
+	if w := e.do("POST", "/api/v1/unseal", "", map[string]string{"passphrase": e.passphrase}); w.Code != 429 {
+		t.Fatalf("tcp should be locked: %d", w.Code)
+	}
+	local := e.srv.LocalHandler()
+	body, _ := json.Marshal(map[string]string{"passphrase": e.passphrase})
+	req := httptest.NewRequest("POST", "/api/v1/unseal", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	local.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("local unseal: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestStepUpAndSessions(t *testing.T) {
+	e := newEnv(t, Options{})
+	// The owner session alone cannot create tokens (finding 4).
+	if w := e.do("POST", "/api/v1/tokens", e.owner, map[string]any{"name": "x", "scopes": []store.Scope{{Folder: "", Perms: []string{"read"}}}}); w.Code != 401 {
+		t.Fatalf("token create without password: %d", w.Code)
+	}
+	if w := e.do("POST", "/api/v1/totp/setup", e.owner, map[string]string{"password": "wrong-" + randHex(t)}); w.Code != 401 {
+		t.Fatalf("totp setup with wrong password: %d", w.Code)
+	}
+	// CLI sessions are short; cookie sessions last an hour.
+	w := e.do("POST", "/api/v1/login", "", map[string]string{"password": e.password})
+	var login struct {
+		Token     string
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &login)
+	if d := time.Until(login.ExpiresAt); d > 16*time.Minute || d < 14*time.Minute {
+		t.Fatalf("cli session ttl %v", d)
+	}
+	// A password change ends every other owner session.
+	newPW := "new-" + randHex(t)
+	if w := e.do("POST", "/api/v1/password", login.Token, map[string]string{"old": e.password, "new": newPW}); w.Code != 204 {
+		t.Fatalf("password change: %d", w.Code)
+	}
+	if w := e.do("GET", "/api/v1/tokens", e.owner, nil); w.Code != 401 {
+		t.Fatalf("old owner session survived a password change: %d", w.Code)
+	}
+	if w := e.do("GET", "/api/v1/tokens", login.Token, nil); w.Code != 200 {
+		t.Fatalf("current session must survive: %d", w.Code)
+	}
+	if w := e.do("GET", "/api/v1/audit/verify", login.Token, nil); !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("audit verify: %s", w.Body)
+	}
+}
+
+// Behind a TLS proxy the server listens on loopback; TOTP and Secure cookies must still apply (finding 2).
+func TestBehindProxy(t *testing.T) {
+	e := newEnv(t, Options{BehindProxy: true})
+	if w := e.do("POST", "/api/v1/login", "", map[string]any{"password": e.password, "cookie": true}); w.Code != 403 {
+		t.Fatalf("login without TOTP behind proxy: %d", w.Code)
+	}
+	// From the local socket the owner can still log in to set TOTP up.
+	body, _ := json.Marshal(map[string]any{"password": e.password, "cookie": true})
+	req := httptest.NewRequest("POST", "/api/v1/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.srv.LocalHandler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("local login: %d", rec.Code)
+	}
+	if c := rec.Result().Cookies(); len(c) != 1 || !c[0].Secure {
+		t.Fatal("cookie must be Secure behind a TLS proxy")
+	}
+	// The audit source is the client the proxy saw.
+	req = httptest.NewRequest("GET", "/api/v1/values/work/acme/db", nil)
+	req.Host = host
+	req.RemoteAddr = "127.0.0.1:5555"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	req.Header.Set("Authorization", "Bearer "+e.inScope)
+	rec = httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	ev, _ := e.st.ListAudit(store.AuditFilter{Target: "work/acme/db", Limit: 1})
+	if len(ev) != 1 || ev[0].Source != "203.0.113.9" {
+		t.Fatalf("audit source %+v", ev)
 	}
 }

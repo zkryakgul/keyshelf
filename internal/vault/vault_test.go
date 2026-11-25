@@ -136,6 +136,9 @@ func TestKDFParamsValidation(t *testing.T) {
 		{Time: 0, MemoryKiB: 64 * 1024, Threads: 4, Salt: p.Salt},
 		{Time: 3, MemoryKiB: 64 * 1024, Threads: 0, Salt: p.Salt},
 		{Time: 3, MemoryKiB: 64 * 1024, Threads: 4, Salt: p.Salt[:8]},
+		{Time: 3, MemoryKiB: 1 << 30, Threads: 4, Salt: p.Salt},
+		{Time: 1000, MemoryKiB: 64 * 1024, Threads: 4, Salt: p.Salt},
+		{Time: 3, MemoryKiB: 64 * 1024, Threads: 255, Salt: p.Salt},
 	}
 	for i, w := range weak {
 		if w.Validate() == nil {

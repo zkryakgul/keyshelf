@@ -118,6 +118,7 @@ func TestEndToEnd(t *testing.T) {
 	h.mustKS("unseal")
 	h.prompts = []string{pw}
 	h.mustKS("login")
+	h.prompts = []string{pw}
 	h.mustKS("token", "create", "agent", "--scope", "work:list,read,write", "--save")
 	cfgRaw, _ := os.ReadFile(filepath.Join(h.dir, "config", "config.json"))
 	if fi, _ := os.Stat(filepath.Join(h.dir, "config", "config.json")); fi.Mode().Perm() != 0o600 {
@@ -161,6 +162,19 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if _, _, code := h.ks("put", "home/x", "--stdin"); code != 1 {
 		t.Fatalf("put outside scope must fail: %d", code)
+	}
+
+	// Secret notes survive a metadata change through the CLI.
+	notes := "notes-" + rnd(t)
+	if _, err := st.GetEntry("work/acme/db"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutEntry(store.EntryInput{Ref: "work/acme/db", Notes: notes, SecretNotes: true, URL: "https://db.example.test"}, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	h.mustKS("put", "work/acme/db", "--username", "root")
+	if v, err := st.GetField("work/acme/db", store.NotesField); err != nil || string(v) != notes {
+		t.Fatalf("secret notes lost: %v", err)
 	}
 
 	// Read via the web UI: cookie login, then a value read with the cookie.
@@ -220,6 +234,9 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// Seal; reads fail with the sealed hint; logout removes the session.
+	if out := h.mustKS("audit", "--verify"); !strings.Contains(out, "intact") {
+		t.Fatalf("audit verify: %s", out)
+	}
 	h.mustKS("seal")
 	if _, errs, _ := h.ks("ls", "--owner"); !strings.Contains(errs, "sealed") {
 		t.Fatalf("sealed hint: %s", errs)
@@ -281,5 +298,71 @@ func TestGenerate(t *testing.T) {
 	b, _ := generate(32, false)
 	if bytes.Equal(a, b) {
 		t.Fatal("repeats")
+	}
+}
+
+func TestChildEnv(t *testing.T) {
+	base := []string{"PATH=/bin", "KEYSHELF_TOKEN=ks_x", "KEYSHELF_URL=http://127.0.0.1:1", "DB_PASS=old", "HOME=/h"}
+	env := childEnv(base, map[string]string{"DB_PASS": "new"}, []string{"DB_PASS"})
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "KEYSHELF_") || strings.Contains(joined, "DB_PASS=old") || !strings.Contains(joined, "DB_PASS=new") || !strings.Contains(joined, "PATH=/bin") {
+		t.Fatalf("env: %v", env)
+	}
+}
+
+func TestCheckServerURL(t *testing.T) {
+	for u, ok := range map[string]bool{
+		"http://127.0.0.1:7733": true, "http://localhost:7733": true, "http://[::1]:7733": true,
+		"https://keys.example.org": true, "http://keys.example.org": false, "http://10.0.0.5:7733": false, "ftp://x": false, "": false,
+	} {
+		if err := checkServerURL(u); (err == nil) != ok {
+			t.Errorf("%q: %v", u, err)
+		}
+	}
+}
+
+// The owner-only socket: listenSocket makes it 0600 in a 0700 directory, and the CLI prefers it.
+func TestLocalSocket(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	h := &harness{t: t, dir: t.TempDir()}
+	pass, pw := "pass-"+rnd(t), "pw-"+rnd(t)
+	h.prompts = []string{pass, pass, pw, pw}
+	h.mustKS("init")
+	st, err := store.Open(filepath.Join(h.dir, "data", "keyshelf.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sock := filepath.Join(dir, "ks.sock")
+	l, err := listenSocket(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := server.New(st, server.Options{AllowedHosts: []string{"none"}})
+	hs := &http.Server{Handler: srv.LocalHandler()}
+	go hs.Serve(l)
+	defer hs.Close()
+	if fi, _ := os.Stat(sock); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode %o", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("socket dir mode %o", fi.Mode().Perm())
+	}
+	if _, err := listenSocket(sock); err == nil {
+		t.Fatal("second listener on a live socket")
+	}
+	a, out, errb := h.app()
+	a.getenv = func(k string) string {
+		if k == "KEYSHELF_SOCKET" {
+			return sock
+		}
+		return ""
+	}
+	h.prompts = []string{pass}
+	if code := a.run([]string{"unseal"}); code != 0 {
+		t.Fatalf("unseal over socket: %s%s", out, errb)
+	}
+	if st.Sealed() {
+		t.Fatal("still sealed")
 	}
 }

@@ -1,0 +1,21 @@
+# keyshelf as a systemd *user* service. Install with scripts/install.sh, or:
+#   cp deploy/keyshelf.service ~/.config/systemd/user/ && systemctl --user enable --now keyshelf
+# The server starts sealed after every start; the owner runs `ks unseal`.
+[Unit]
+Description=keyshelf secret shelf
+Documentation=https://github.com/zkryakgul/keyshelf
+
+[Service]
+ExecStart=%h/.local/bin/ks serve --listen 127.0.0.1:7733
+Restart=on-failure
+RestartSec=2
+UMask=0077
+# No core dumps: an unsealed process holds the data key in memory.
+LimitCORE=0
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=default.target

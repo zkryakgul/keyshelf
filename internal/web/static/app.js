@@ -56,7 +56,7 @@ async function api(method, path, { json, raw, query } = {}) {
     let msg = r.statusText;
     try { msg = (await r.json()).error || msg; } catch (_) { /* not JSON */ }
     if (r.status === 503 && /sealed/.test(msg)) { show("unseal"); }
-    else if (r.status === 401 && path !== "login") { csrf = ""; show("login"); }
+    else if (r.status === 401 && path !== "login" && !/login password/.test(msg)) { csrf = ""; show("login"); }
     throw new APIError(r.status, msg);
   }
   if (r.status === 204) return null;
@@ -449,10 +449,10 @@ $("[data-create]", dlgTokens).addEventListener("click", async () => {
       return { folder: l.slice(0, i).replace(/^\/+|\/+$/g, ""), perms: l.slice(i + 1).split(",").map((p) => p.trim()).filter(Boolean) };
     });
     const days = parseInt(f.days.value, 10);
-    const r = await api("POST", "tokens", { json: { name: f.name.value.trim(), scopes, ttl_seconds: days > 0 ? days * 86400 : 0 } });
+    const r = await api("POST", "tokens", { json: { name: f.name.value.trim(), scopes, ttl_seconds: days > 0 ? days * 86400 : 0, password: f.password.value } });
     $("[data-secret]", f).textContent = r.token;
     $("[data-newtoken]", f).hidden = false;
-    f.name.value = ""; f.scopes.value = ""; f.days.value = "";
+    f.name.value = ""; f.scopes.value = ""; f.days.value = ""; f.password.value = "";
     loadTokens();
   } catch (e) { formError(f, e); }
 });
